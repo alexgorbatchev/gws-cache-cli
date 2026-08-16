@@ -52,6 +52,11 @@ func TestStoreOperations(t *testing.T) {
 		t.Fatalf("ListTopics failed: %v, count: %d", err, len(topicsList))
 	}
 
+	// GetTopicBySlug error
+	if _, err := db.GetTopicBySlug("nonexistent"); err == nil {
+		t.Fatal("expected error for nonexistent topic")
+	}
+
 	// 2. Add and List Queries
 	if err := db.AddQuery(top.ID, "label:tech"); err != nil {
 		t.Fatalf("AddQuery failed: %v", err)
@@ -71,6 +76,11 @@ func TestStoreOperations(t *testing.T) {
 	hasThread, err := db.HasThreadWithHistory("t-101", "hist-101")
 	if err != nil || !hasThread {
 		t.Fatalf("HasThreadWithHistory failed or false: %v", err)
+	}
+
+	// UpsertThread with topic_id 0 updates existing without changing topic_id
+	if err := db.UpsertThread("t-101", 0, "hist-102", "Updated snippet"); err != nil {
+		t.Fatalf("UpsertThread update failed: %v", err)
 	}
 
 	// 4. Upsert Message
@@ -93,6 +103,13 @@ func TestStoreOperations(t *testing.T) {
 		t.Fatalf("UpsertMessage failed: %v", err)
 	}
 
+	// UpsertMessage update with topic_id 0
+	msg.Snippet = "Updated snippet content"
+	msg.TopicID = 0
+	if err := db.UpsertMessage(msg); err != nil {
+		t.Fatalf("UpsertMessage update failed: %v", err)
+	}
+
 	// 5. List Messages by Topic
 	msgs, err := db.ListMessagesByTopic(top.ID, false, 0)
 	if err != nil || len(msgs) != 1 {
@@ -109,6 +126,12 @@ func TestStoreOperations(t *testing.T) {
 	searched, err := db.SearchMessages("Weekly", "newsletters", true, 1000)
 	if err != nil || len(searched) != 1 {
 		t.Fatalf("SearchMessages failed: %v, found: %d", err, len(searched))
+	}
+
+	// SearchMessages without parameters
+	allSearched, err := db.SearchMessages("", "", false, 0)
+	if err != nil || len(allSearched) != 1 {
+		t.Fatalf("SearchMessages all failed: %v, count: %d", err, len(allSearched))
 	}
 
 	// 7. Update Topic Sync State
@@ -162,9 +185,28 @@ func TestStoreOperations(t *testing.T) {
 		t.Fatalf("UpsertCalendarEvent failed: %v", err)
 	}
 
+	// UpsertCalendarEvent with nil TopicID
+	eventNoTopic := &CalendarEvent{
+		ID:         "evt-102",
+		CalendarID: "primary",
+		TopicID:    nil,
+		Summary:    "Generic Meeting",
+		StartTime:  time.Now().UTC(),
+		EndTime:    time.Now().Add(time.Hour).UTC(),
+		Status:     "confirmed",
+	}
+	if err := db.UpsertCalendarEvent(eventNoTopic); err != nil {
+		t.Fatalf("UpsertCalendarEvent no topic failed: %v", err)
+	}
+
 	events, err := db.ListCalendarEvents("primary", "newsletters", 1000)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("ListCalendarEvents failed: %v, count: %d", err, len(events))
+	}
+
+	eventsAll, err := db.ListCalendarEvents("", "", 0)
+	if err != nil || len(eventsAll) != 2 {
+		t.Fatalf("ListCalendarEvents all failed: %v, count: %d", err, len(eventsAll))
 	}
 
 	// 10. Stats
@@ -186,5 +228,12 @@ func TestStoreOperations(t *testing.T) {
 
 	if _, err := db.GetTopicBySlug("newsletters"); err == nil {
 		t.Fatal("expected error getting deleted topic")
+	}
+}
+
+func TestOpenError(t *testing.T) {
+	_, err := Open("/dev/null/invalid/path/db.db")
+	if err == nil {
+		t.Fatal("expected error opening invalid path")
 	}
 }
