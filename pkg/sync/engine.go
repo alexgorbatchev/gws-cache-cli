@@ -56,7 +56,14 @@ func (e *Engine) SyncTopic(slug string, opts SyncOptions) (*SyncResult, error) {
 
 	res, syncErr := e.doSyncTopic(top, opts)
 	if syncErr != nil {
-		_ = e.store.CompleteSyncRun(runID, "failed", res.ThreadsFetched, res.MessagesIngested, res.MaxHistoryID, syncErr.Error())
+		threadsFetched, msgsIngested := 0, 0
+		maxHistID := ""
+		if res != nil {
+			threadsFetched = res.ThreadsFetched
+			msgsIngested = res.MessagesIngested
+			maxHistID = res.MaxHistoryID
+		}
+		_ = e.store.CompleteSyncRun(runID, "failed", threadsFetched, msgsIngested, maxHistID, syncErr.Error())
 		return res, syncErr
 	}
 
@@ -90,7 +97,7 @@ func (e *Engine) doSyncTopic(top *store.Topic, opts SyncOptions) (*SyncResult, e
 	} else if opts.Since != "" {
 		cSec, err := ParseSince(opts.Since)
 		if err != nil {
-			return nil, fmt.Errorf("invalid since window %q: %w", opts.Since, err)
+			return res, fmt.Errorf("invalid since window %q: %w", opts.Since, err)
 		}
 		cutoffSec = cSec
 	}
@@ -218,11 +225,16 @@ func (e *Engine) SyncAllTopics(opts SyncOptions) ([]SyncResult, error) {
 	for _, top := range topics {
 		res, err := e.SyncTopic(top.Slug, opts)
 		if err != nil {
+			errStr := err.Error()
+			topicSlug := top.Slug
+			if res != nil && res.TopicSlug != "" {
+				topicSlug = res.TopicSlug
+			}
 			results = append(results, SyncResult{
-				TopicSlug: top.Slug,
-				Error:     err.Error(),
+				TopicSlug: topicSlug,
+				Error:     errStr,
 			})
-		} else {
+		} else if res != nil {
 			results = append(results, *res)
 		}
 	}
@@ -303,7 +315,7 @@ func parseAddress(from string) (string, string) {
 
 func trimQuotes(s string) string {
 	s = trimSpace(s)
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
 		return s[1 : len(s)-1]
 	}
 	return s

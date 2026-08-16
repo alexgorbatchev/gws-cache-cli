@@ -28,17 +28,41 @@ func (m *mockCLIClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.C
 	}, nil
 }
 
+func (m *mockCLIClient) ListThreads(query string) ([]gmail.ThreadSummary, error) {
+	return []gmail.ThreadSummary{
+		{ID: "t-1", HistoryID: "100", Snippet: "Weekly Tech Digest"},
+	}, nil
+}
+
+func (m *mockCLIClient) GetThread(threadID string) (*gmail.ThreadDetail, error) {
+	return &gmail.ThreadDetail{
+		ID:        "t-1",
+		HistoryID: "100",
+		Messages: []gmail.MessageDetail{
+			{
+				ID:           "m-1",
+				ThreadID:     "t-1",
+				HistoryID:    "100",
+				InternalDate: "1770000000000",
+				Snippet:      "Here is your newsletter.",
+				Payload: gmail.Payload{
+					Headers: []gmail.Header{
+						{Name: "From", Value: "editor@tech.com"},
+						{Name: "Subject", Value: "Tech Weekly #1"},
+						{Name: "Date", Value: "Mon, 20 Jul 2026 13:00:00 -0700"},
+					},
+				},
+			},
+		},
+	}, nil
+}
+
 func TestCLICommands(t *testing.T) {
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, "test.db")
 
-	// Override newClient with mock
 	newClient = func() gmail.Client {
-		c := &mockCLIClient{}
-		c.ExecCommand = func(name string, arg ...string) ([]byte, error) {
-			return []byte(`{"threads":[], "resultSizeEstimate": 0}`), nil
-		}
-		return c
+		return &mockCLIClient{}
 	}
 
 	rootCmd := NewRootCmd()
@@ -46,7 +70,37 @@ func TestCLICommands(t *testing.T) {
 	rootCmd.SetOut(buf)
 	rootCmd.SetErr(buf)
 
-	// 1. Topic Add
+	// 1. Topic List Empty
+	rootCmd.SetArgs([]string{"--db", testDB, "topic", "list"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("topic list empty failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "No topics tracked yet.") {
+		t.Fatalf("expected empty topic list message, got: %s", buf.String())
+	}
+
+	// 2. Calendar List Empty
+	buf.Reset()
+	rootCmd.SetArgs([]string{"--db", testDB, "calendar", "list"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("calendar list empty failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "No calendar events found.") {
+		t.Fatalf("expected empty calendar events message, got: %s", buf.String())
+	}
+
+	// 3. Search Empty
+	buf.Reset()
+	rootCmd.SetArgs([]string{"--db", testDB, "search", "nonexistent"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("search empty failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "No matching cached messages found.") {
+		t.Fatalf("expected empty search message, got: %s", buf.String())
+	}
+
+	// 4. Topic Add
+	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "topic", "add", "newsletters", "--name", "Tech Newsletters", "--query", "category:promotions"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("topic add failed: %v", err)
@@ -58,7 +112,7 @@ func TestCLICommands(t *testing.T) {
 		t.Fatal("expected error adding duplicate topic")
 	}
 
-	// 2. Topic List
+	// 5. Topic List Non-empty
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "topic", "list"})
 	if err := rootCmd.Execute(); err != nil {
@@ -68,7 +122,7 @@ func TestCLICommands(t *testing.T) {
 		t.Fatalf("topic list missing added topic: %s", buf.String())
 	}
 
-	// 3. Sync Single Topic
+	// 6. Sync Single Topic
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "sync", "newsletters"})
 	if err := rootCmd.Execute(); err != nil {
@@ -82,14 +136,14 @@ func TestCLICommands(t *testing.T) {
 		t.Fatalf("sync auto-register billing failed: %v", err)
 	}
 
-	// 4. Calendar Sync Command
+	// 7. Calendar Sync Command
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "calendar", "sync", "--past", "4w", "--future", "4w"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("calendar sync failed: %v", err)
 	}
 
-	// 5. Calendar List Command
+	// 8. Calendar List Command
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "calendar", "list", "newsletters", "--format", "json", "--since", "all"})
 	if err := rootCmd.Execute(); err != nil {
@@ -102,34 +156,40 @@ func TestCLICommands(t *testing.T) {
 		t.Fatalf("calendar list table failed: %v", err)
 	}
 
-	// 6. Scan Inbox Command
+	// 9. Scan Inbox Command
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "scan", "--since", "all"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("scan failed: %v", err)
 	}
 
-	// 7. Search Command
+	// 10. Search Command with results
 	buf.Reset()
-	rootCmd.SetArgs([]string{"--db", testDB, "search", "Tech", "--since", "all", "--format", "json"})
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("search failed: %v", err)
-	}
-
-	buf.Reset()
-	rootCmd.SetArgs([]string{"--db", testDB, "search", "--since", "all", "--format", "table"})
+	rootCmd.SetArgs([]string{"--db", testDB, "search", "Tech", "--topic", "newsletters", "--human-only", "--since", "all", "--format", "table"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("search table failed: %v", err)
 	}
+	if !strings.Contains(buf.String(), "Tech Weekly") {
+		t.Fatalf("expected search output to contain message subject, got: %s", buf.String())
+	}
 
-	// 8. Sync All Topics
+	buf.Reset()
+	rootCmd.SetArgs([]string{"--db", testDB, "search", "--since", "all", "--format", "json"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("search json failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "m-1") {
+		t.Fatalf("expected search json to contain message ID, got: %s", buf.String())
+	}
+
+	// 11. Sync All Topics
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "sync", "--all"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("sync --all failed: %v", err)
 	}
 
-	// 9. Status
+	// 12. Status
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "status"})
 	if err := rootCmd.Execute(); err != nil {
@@ -139,7 +199,7 @@ func TestCLICommands(t *testing.T) {
 		t.Fatalf("unexpected status output: %s", buf.String())
 	}
 
-	// 10. Export
+	// 13. Export
 	buf.Reset()
 	rootCmd.SetArgs([]string{"--db", testDB, "export", "newsletters", "--format", "json"})
 	if err := rootCmd.Execute(); err != nil {
@@ -152,7 +212,7 @@ func TestCLICommands(t *testing.T) {
 		t.Fatal("expected error exporting nonexistent topic")
 	}
 
-	// 11. Topic Remove
+	// 14. Topic Remove
 	rootCmd.SetArgs([]string{"--db", testDB, "topic", "remove", "newsletters"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("topic remove failed: %v", err)

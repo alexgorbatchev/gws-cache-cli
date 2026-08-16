@@ -231,6 +231,72 @@ func TestStoreOperations(t *testing.T) {
 	}
 }
 
+func TestStoreErrorsOnClosedDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "closed.db")
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	db.Close() // Close immediately to trigger error branches
+
+	if _, err := db.HasThreadWithHistory("t", "h"); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.UpsertCalendarEvent(&CalendarEvent{ID: "e"}); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.GetCalendarSyncState("c"); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.UpdateCalendarSyncState(&CalendarSyncState{CalendarID: "c"}); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.ListCalendarEvents("c", "s", 0); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.CreateTopic("s", "n", "q"); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.ListTopics(); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.DeleteTopic("s"); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.AddQuery(1, "q"); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.ListQueries(1); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.UpsertThread("t", 1, "h", "s"); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.UpsertMessage(&Message{ID: "m"}); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.UpdateTopicSyncState(1, "h", 100); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.ListMessagesByTopic(1, false, 0); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.SearchMessages("k", "s", false, 0); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.StartSyncRun(1); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if err := db.CompleteSyncRun(1, "f", 0, 0, "", ""); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+	if _, _, _, err := db.Stats(); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+}
+
 func TestOpenError(t *testing.T) {
 	_, err := Open("/dev/null/invalid/path/db.db")
 	if err == nil {

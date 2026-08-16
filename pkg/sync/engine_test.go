@@ -56,6 +56,7 @@ func TestSyncEngine(t *testing.T) {
 	mockClient := &mockGmailClient{
 		threads: []gmail.ThreadSummary{
 			{ID: "t1", HistoryID: "100", Snippet: "Weekly Tech Digest"},
+			{ID: "t2", HistoryID: "101", Snippet: "Second Digest"},
 		},
 		details: map[string]*gmail.ThreadDetail{
 			"t1": {
@@ -79,14 +80,26 @@ func TestSyncEngine(t *testing.T) {
 					},
 				},
 			},
+			"t2": {
+				ID:        "t2",
+				HistoryID: "101",
+				Messages: []gmail.MessageDetail{
+					{
+						ID:           "m2",
+						ThreadID:     "t2",
+						HistoryID:    "101",
+						InternalDate: "1770000001000",
+						Snippet:      "Second issue.",
+					},
+				},
+			},
 		},
 	}
 
 	engine := NewEngine(db, mockClient)
-	opts := SyncOptions{Since: "4w", MaxThreads: 10}
 
-	// Cold Start Sync
-	res, err := engine.SyncTopic("newsletters", opts)
+	// Cold Start Sync with maxThreads cap
+	res, err := engine.SyncTopic("newsletters", SyncOptions{Since: "4w", MaxThreads: 1})
 	if err != nil {
 		t.Fatalf("SyncTopic failed: %v", err)
 	}
@@ -95,7 +108,7 @@ func TestSyncEngine(t *testing.T) {
 	}
 
 	// Warm Start Sync
-	resWarm, err := engine.SyncTopic("newsletters", opts)
+	resWarm, err := engine.SyncTopic("newsletters", SyncOptions{MaxThreads: 10})
 	if err != nil {
 		t.Fatalf("SyncTopic warm start failed: %v", err)
 	}
@@ -104,7 +117,7 @@ func TestSyncEngine(t *testing.T) {
 	}
 
 	// Sync All
-	allRes, err := engine.SyncAllTopics(opts)
+	allRes, err := engine.SyncAllTopics(SyncOptions{MaxThreads: 10})
 	if err != nil {
 		t.Fatalf("SyncAllTopics failed: %v", err)
 	}
@@ -112,8 +125,8 @@ func TestSyncEngine(t *testing.T) {
 		t.Fatalf("expected 1 result from SyncAllTopics, got %d", len(allRes))
 	}
 
-	// Sync Topic auto-registers new slug on the fly
-	resAuto, err := engine.SyncTopic("billing", opts)
+	// Sync Topic auto-registers new slug on the fly with empty query
+	resAuto, err := engine.SyncTopic("billing", SyncOptions{MaxThreads: 10})
 	if err != nil {
 		t.Fatalf("expected auto-registration for billing, got error: %v", err)
 	}
@@ -121,11 +134,26 @@ func TestSyncEngine(t *testing.T) {
 		t.Fatalf("unexpected auto sync result: %+v", resAuto)
 	}
 
+	// Sync with invalid since error
+	_, err = engine.SyncTopic("newsletters", SyncOptions{ForceFull: true, Since: "invalid"})
+	if err == nil {
+		t.Fatal("expected error on invalid since")
+	}
+
 	// List threads error test
 	mockClient.listErr = errors.New("list threads error")
-	_, err = engine.SyncTopic("newsletters", opts)
+	_, err = engine.SyncTopic("newsletters", SyncOptions{MaxThreads: 10})
 	if err == nil {
 		t.Fatal("expected error on ListThreads error")
+	}
+
+	// SyncAllTopics handles individual topic error gracefully
+	syncAllErrRes, err := engine.SyncAllTopics(SyncOptions{MaxThreads: 10})
+	if err != nil {
+		t.Fatalf("SyncAllTopics should not fail overall, got: %v", err)
+	}
+	if len(syncAllErrRes) < 1 || syncAllErrRes[0].Error == "" {
+		t.Fatalf("expected error in individual result, got: %+v", syncAllErrRes)
 	}
 	mockClient.listErr = nil
 
@@ -134,7 +162,7 @@ func TestSyncEngine(t *testing.T) {
 	mockClient.threads = []gmail.ThreadSummary{
 		{ID: "t999", HistoryID: "999", Snippet: "Uncached thread"},
 	}
-	resWarn, err := engine.SyncTopic("newsletters", opts)
+	resWarn, err := engine.SyncTopic("newsletters", SyncOptions{MaxThreads: 10})
 	if err != nil {
 		t.Fatalf("SyncTopic should handle thread error gracefully, got: %v", err)
 	}

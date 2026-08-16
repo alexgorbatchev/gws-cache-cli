@@ -28,6 +28,11 @@ func TestTopicService(t *testing.T) {
 		t.Fatalf("unexpected topic data: %+v", top)
 	}
 
+	// Register Topic Duplicate Error
+	if _, err := svc.RegisterTopic("newsletters", "Tech Newsletters", "category:promotions"); err == nil {
+		t.Fatal("expected error registering duplicate topic")
+	}
+
 	// 2. Register Topic with empty display name
 	top2, err := svc.RegisterTopic("billing", "", "from:billing@")
 	if err != nil {

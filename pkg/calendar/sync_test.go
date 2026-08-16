@@ -10,8 +10,9 @@ import (
 )
 
 type mockCalendarClient struct {
-	resp    *gmail.CalendarEventsResponse
-	listErr error
+	resp      *gmail.CalendarEventsResponse
+	listErr   error
+	callCount int
 }
 
 func (m *mockCalendarClient) ListThreads(query string) ([]gmail.ThreadSummary, error) {
@@ -23,8 +24,12 @@ func (m *mockCalendarClient) GetThread(threadID string) (*gmail.ThreadDetail, er
 }
 
 func (m *mockCalendarClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.CalendarEventsResponse, error) {
+	m.callCount++
 	if m.listErr != nil {
 		return nil, m.listErr
+	}
+	if p.SyncToken == "invalid-token" && m.callCount == 1 {
+		return nil, errors.New("sync token expired")
 	}
 	if m.resp != nil {
 		return m.resp, nil
@@ -93,6 +98,20 @@ func TestCalendarEngine(t *testing.T) {
 		t.Fatalf("unexpected warm sync result: %+v", resWarm)
 	}
 
+	// Test SyncToken fallback on error
+	_ = db.UpdateCalendarSyncState(&store.CalendarSyncState{
+		CalendarID: "primary",
+		SyncToken:  "invalid-token",
+	})
+	mockClient.callCount = 0
+	resFallback, err := engine.SyncCalendar(SyncOptions{})
+	if err != nil {
+		t.Fatalf("expected sync token fallback to succeed, got: %v", err)
+	}
+	if resFallback.EventsFetched != 2 {
+		t.Fatalf("unexpected fallback sync result: %+v", resFallback)
+	}
+
 	// Verify events in DB
 	events, err := db.ListCalendarEvents("primary", "newsletters", 0)
 	if err != nil {
@@ -107,6 +126,24 @@ func TestCalendarEngine(t *testing.T) {
 	_, err = engine.SyncCalendar(SyncOptions{ForceFull: true})
 	if err == nil {
 		t.Fatal("expected error on calendar API failure")
+	}
+}
+
+func TestParseEventTimes(t *testing.T) {
+	// All day event
+	itemDate := gmail.CalendarEventDetail{}
+	itemDate.Start.Date = "2026-08-15"
+	itemDate.End.Date = "2026-08-16"
+	start, end := parseEventTimes(itemDate)
+	if start.IsZero() || end.IsZero() {
+		t.Fatal("expected non-zero dates for all-day event")
+	}
+
+	// Empty event fallback
+	itemEmpty := gmail.CalendarEventDetail{}
+	startEmpty, endEmpty := parseEventTimes(itemEmpty)
+	if startEmpty.IsZero() || endEmpty.IsZero() {
+		t.Fatal("expected non-zero fallback dates")
 	}
 }
 
