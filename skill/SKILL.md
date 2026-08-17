@@ -7,7 +7,7 @@ description: >-
 author: alexgorbatchev
 metadata:
   created_on: 2026-07-30 16:00
-  last_modified: 2026-08-01 16:30
+  last_modified: 2026-08-15 01:15
   status: current
 ---
 
@@ -15,6 +15,30 @@ metadata:
 
 The `gws-cache` executable is located at `./bin/gws-cache` (or built via `just build` in root).
 Database path default: `./bin/cache.db` (adjacent to binary).
+
+## Prerequisites & Authentication Setup
+
+`gws-cache` requires the `gws` CLI ([@googleworkspace/cli](https://github.com/googleworkspace/cli)) installed and authenticated.
+
+### 1. Install `gws` CLI
+```bash
+npm install -g @googleworkspace/cli
+```
+
+### 2. Required Google Cloud APIs
+Enable the following APIs in your Google Cloud project (or run `gws auth setup`):
+- **Gmail API** (`gmail.googleapis.com`)
+- **Google Calendar API** (`calendar-json.googleapis.com`)
+
+### 3. Authenticate `gws`
+Authorize `gws` for Gmail and Calendar scopes:
+```bash
+gws auth login -s gmail,calendar
+```
+
+Required OAuth Scopes:
+- **Gmail Readonly**: `https://www.googleapis.com/auth/gmail.readonly` (`users.threads.list`, `users.threads.get`)
+- **Calendar Readonly**: `https://www.googleapis.com/auth/calendar.readonly` (`events.list`)
 
 ## Core Commands & Usage
 
@@ -52,7 +76,7 @@ Syncs email threads for a specific topic or query into local SQLite using high-w
 Searches local SQLite cache (0ms network overhead) by keyword, topic, date, or sender.
 ```bash
 # Search cached emails for a keyword across all topics
-./bin/gws-cache search "Weekly Digest"
+./bin/gws-cache search "Digest"
 
 # Filter search by topic, date lookback, or human-only emails
 ./bin/gws-cache search --topic newsletters --since 14d --human-only --format table

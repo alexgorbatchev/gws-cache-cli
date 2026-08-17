@@ -1,6 +1,6 @@
 # gws-cache
 
-`gws-cache` is a fast, local SQLite caching layer for Gmail threads and Google Calendar events accessed via the [`gws`](https://github.com/google/gws) CLI.
+`gws-cache` is a fast, local SQLite caching layer for Gmail threads and Google Calendar events accessed via the [`gws`](https://github.com/googleworkspace/cli) CLI.
 
 It provides token-efficient, 0ms local offline queries, keyword search, timeline exporting, and high-watermark delta synchronization for Gmail messages and Google Calendar invites.
 
@@ -14,10 +14,53 @@ It provides token-efficient, 0ms local offline queries, keyword search, timeline
 - **Google Calendar Sync**: Synchronize calendar invites using Google Calendar `syncToken` delta ingestion and dual-horizon lookback/lookahead windows.
 - **Email Classifier**: Automatically identifies automated system notifications, bulk lists, and transactional emails versus human messages.
 
-## Prerequisites
+## Prerequisites & Authentication Setup
 
-- [`gws`](https://github.com/google/gws) CLI installed and authenticated with your Google Workspace account.
-- SQLite database storage (CGO-free via `modernc.org/sqlite`).
+`gws-cache` relies on the [`gws`](https://github.com/googleworkspace/cli) (Google Workspace) CLI for live fetching from Gmail and Google Calendar APIs.
+
+### 1. Install `gws` CLI
+
+Install `gws` globally via npm or download from [googleworkspace/cli releases](https://github.com/googleworkspace/cli/releases):
+
+```bash
+npm install -g @googleworkspace/cli
+
+# Verify gws is installed:
+gws --version
+```
+
+### 2. Enable Required Google Cloud APIs
+
+`gws` requires a Google Cloud project with the following APIs enabled:
+- **Gmail API** (`gmail.googleapis.com`)
+- **Google Calendar API** (`calendar-json.googleapis.com`)
+
+Run `gws auth setup` to configure a Google Cloud project automatically, or enable these APIs manually in the [Google Cloud Console](https://console.cloud.google.com/).
+
+### 3. Authenticate `gws` with Gmail & Calendar Scopes
+
+Run `gws auth login` targeting the `gmail` and `calendar` services:
+
+```bash
+# Interactively authenticate gws for Gmail and Calendar
+gws auth login -s gmail,calendar
+```
+
+#### Required Scopes:
+- **Gmail Readonly**: `https://www.googleapis.com/auth/gmail.readonly` (for `users.threads.list` and `users.threads.get`).
+- **Calendar Readonly**: `https://www.googleapis.com/auth/calendar.readonly` or `https://www.googleapis.com/auth/calendar.events.readonly` (for `events.list`).
+
+### 4. Verify `gws` Connection
+
+Verify `gws` authentication before using `gws-cache`:
+
+```bash
+# Test Gmail thread access
+gws gmail users threads list --params '{"userId": "me", "q": "in:inbox"}'
+
+# Test Calendar access
+gws calendar events list --params '{"calendarId": "primary"}'
+```
 
 ## Installation
 
@@ -27,11 +70,11 @@ Download the latest release binary for your platform from [GitHub Releases](http
 
 ```bash
 # macOS (Apple Silicon / ARM64)
-curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v0.1.0/gws-cache-darwin-arm64 -o /usr/local/bin/gws-cache
+curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v0.1.2/gws-cache-darwin-arm64 -o /usr/local/bin/gws-cache
 chmod +x /usr/local/bin/gws-cache
 
 # Linux (x86_64)
-curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v0.1.0/gws-cache-linux-amd64 -o /usr/local/bin/gws-cache
+curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v0.1.2/gws-cache-linux-amd64 -o /usr/local/bin/gws-cache
 chmod +x /usr/local/bin/gws-cache
 ```
 
