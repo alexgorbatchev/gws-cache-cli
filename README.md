@@ -64,18 +64,18 @@ gws calendar events list --params '{"calendarId": "primary"}'
 
 ## Installation
 
-### Download Pre-Built Binaries
+### Download Pre-Built Release Archives
 
-Download the latest release binary for your platform from [GitHub Releases](https://github.com/alexgorbatchev/gws-cache-cli/releases):
+Download the latest release archive from [GitHub Releases](https://github.com/alexgorbatchev/gws-cache-cli/releases):
 
 ```bash
 # macOS (Apple Silicon / ARM64)
-curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v0.1.2/gws-cache-darwin-arm64 -o /usr/local/bin/gws-cache
-chmod +x /usr/local/bin/gws-cache
+curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v1.0.0/gws-cache_1.0.0_darwin_arm64.tar.gz | tar -xz
+sudo mv gws-cache /usr/local/bin/
 
 # Linux (x86_64)
-curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v0.1.2/gws-cache-linux-amd64 -o /usr/local/bin/gws-cache
-chmod +x /usr/local/bin/gws-cache
+curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v1.0.0/gws-cache_1.0.0_linux_amd64.tar.gz | tar -xz
+sudo mv gws-cache /usr/local/bin/
 ```
 
 ### Build From Source
@@ -165,7 +165,7 @@ gws-cache export newsletters --format markdown
 gws-cache export newsletters --since all --format markdown
 gws-cache export newsletters --since 2w --format markdown
 
-# Export JSON payload
+# Export structured JSON payload
 gws-cache export newsletters --format json --human-only
 ```
 
@@ -196,6 +196,7 @@ gws-cache status
 ## Configuration & Flags
 
 - `--db <path>`: Custom path to SQLite cache database (defaults to `cache.db` adjacent to executable).
+- `--version`: Print CLI version string.
 
 ## Development
 
