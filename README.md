@@ -195,7 +195,7 @@ gws-cache status
 
 ## Configuration & Flags
 
-- `--db <path>`: Custom path to SQLite cache database (defaults to `cache.db` adjacent to executable).
+- `--db <path>`: Custom path to SQLite cache database (defaults to `$XDG_CACHE_HOME/gws-cache/cache.db` or `~/.cache/gws-cache/cache.db`).
 - `--version`: Print CLI version string.
 
 ## Development

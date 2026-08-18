@@ -11,14 +11,23 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// DefaultDBPath returns the default database file path adjacent to the executable.
+// DefaultDBPath returns the default database file path following XDG Base Directory specification.
 func DefaultDBPath() string {
-	execPath, err := os.Executable()
-	if err == nil {
-		dir := filepath.Dir(execPath)
-		return filepath.Join(dir, "cache.db")
+	if xdgCache := os.Getenv("XDG_CACHE_HOME"); xdgCache != "" {
+		return filepath.Join(xdgCache, "gws-cache", "cache.db")
 	}
-	return filepath.Join("bin", "cache.db")
+
+	dir, err := os.UserCacheDir()
+	if err == nil && dir != "" {
+		return filepath.Join(dir, "gws-cache", "cache.db")
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		return filepath.Join(home, ".cache", "gws-cache", "cache.db")
+	}
+
+	return filepath.Join(".", "cache.db")
 }
 
 type Topic struct {

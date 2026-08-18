@@ -14,7 +14,7 @@ metadata:
 ## Binary Location & Setup
 
 The `gws-cache` executable is located at `./bin/gws-cache` (or built via `just build` in root).
-Database path default: `./bin/cache.db` (adjacent to binary).
+Database path default: `$XDG_CACHE_HOME/gws-cache/cache.db` (or `~/.cache/gws-cache/cache.db`).
 
 ## Prerequisites & Authentication Setup
 

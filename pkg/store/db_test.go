@@ -7,9 +7,29 @@ import (
 )
 
 func TestDefaultDBPath(t *testing.T) {
-	path := DefaultDBPath()
-	if path == "" {
+	tmpDir := t.TempDir()
+
+	// 1. XDG_CACHE_HOME explicitly set
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+	pathXDG := DefaultDBPath()
+	expectedXDG := filepath.Join(tmpDir, "gws-cache", "cache.db")
+	if pathXDG != expectedXDG {
+		t.Fatalf("expected XDG path %q, got %q", expectedXDG, pathXDG)
+	}
+
+	// 2. Default UserCacheDir / HOME
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", tmpDir)
+	defaultPath := DefaultDBPath()
+	if defaultPath == "" {
 		t.Fatal("expected non-empty default DB path")
+	}
+
+	// 3. Fallback when HOME is invalid/empty
+	t.Setenv("HOME", "")
+	fallbackPath := DefaultDBPath()
+	if fallbackPath == "" {
+		t.Fatal("expected fallback path")
 	}
 }
 
