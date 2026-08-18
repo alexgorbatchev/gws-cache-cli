@@ -31,6 +31,8 @@ func NewRootCmd() *cobra.Command {
 		Version: version,
 	}
 
+	rootCmd.SetVersionTemplate("{{.Version}}\n")
+
 	defaultDB := store.DefaultDBPath()
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", defaultDB, "Path to SQLite cache database")
 

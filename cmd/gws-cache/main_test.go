@@ -233,8 +233,8 @@ func TestVersionFlag(t *testing.T) {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("version flag failed: %v", err)
 	}
-	if !strings.Contains(buf.String(), "gws-cache version dev") {
-		t.Fatalf("unexpected version output: %s", buf.String())
+	if strings.TrimSpace(buf.String()) != "dev" {
+		t.Fatalf("unexpected version output: %q, expected 'dev'", buf.String())
 	}
 }
 
