@@ -225,6 +225,19 @@ func TestCLICommands(t *testing.T) {
 	}
 }
 
+func TestVersionFlag(t *testing.T) {
+	rootCmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	rootCmd.SetOut(buf)
+	rootCmd.SetArgs([]string{"--version"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("version flag failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "gws-cache version dev") {
+		t.Fatalf("unexpected version output: %s", buf.String())
+	}
+}
+
 func TestGetDB(t *testing.T) {
 	dbPath = ""
 	db, err := getDB()

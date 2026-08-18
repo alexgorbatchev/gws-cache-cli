@@ -16,7 +16,8 @@ import (
 )
 
 var (
-	dbPath string
+	version = "dev"
+	dbPath  string
 
 	newClient = func() gmail.Client {
 		return gmail.NewCLIClient()
@@ -25,8 +26,9 @@ var (
 
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "gws-cache",
-		Short: "Local SQLite caching layer for Gmail threads and Google Calendar via gws CLI",
+		Use:     "gws-cache",
+		Short:   "Local SQLite caching layer for Gmail threads and Google Calendar via gws CLI",
+		Version: version,
 	}
 
 	defaultDB := store.DefaultDBPath()
