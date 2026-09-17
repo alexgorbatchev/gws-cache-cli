@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/sync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/mailsync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type Exporter struct {
@@ -41,7 +41,7 @@ func (e *Exporter) ExportTopic(slug string, opts Options) (string, error) {
 		return "", fmt.Errorf("getting topic %q: %w", slug, err)
 	}
 
-	sinceSec, _ := sync.ParseSince(opts.Since)
+	sinceSec, _ := mailsync.ParseSince(opts.Since)
 	msgs, err := e.store.ListMessagesByTopic(top.ID, opts.HumanOnly, sinceSec)
 	if err != nil {
 		return "", fmt.Errorf("listing messages: %w", err)

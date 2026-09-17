@@ -5,19 +5,19 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/classifier"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/sync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/classifier"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/mailsync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type Scanner struct {
 	store    *store.DB
-	client   gmail.Client
+	client   gws.Client
 	Progress func(format string, args ...any)
 }
 
-func NewScanner(s *store.DB, c gmail.Client) *Scanner {
+func NewScanner(s *store.DB, c gws.Client) *Scanner {
 	return &Scanner{
 		store:  s,
 		client: c,
@@ -52,7 +52,7 @@ func (s *Scanner) ScanInbox(opts ScanOptions) (*ScanResult, error) {
 		query = "in:inbox"
 	}
 
-	cSec, err := sync.ParseSince(opts.Since)
+	cSec, err := mailsync.ParseSince(opts.Since)
 	if err != nil {
 		return nil, fmt.Errorf("invalid since window: %w", err)
 	}
@@ -165,7 +165,7 @@ func (s *Scanner) ScanInbox(opts ScanOptions) (*ScanResult, error) {
 }
 
 func (s *Scanner) SearchCached(opts SearchOptions) ([]store.Message, error) {
-	cSec, err := sync.ParseSince(opts.Since)
+	cSec, err := mailsync.ParseSince(opts.Since)
 	if err != nil {
 		return nil, fmt.Errorf("invalid since lookback: %w", err)
 	}

@@ -3,7 +3,7 @@ package topic
 import (
 	"fmt"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type Service struct {

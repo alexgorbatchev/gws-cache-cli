@@ -6,18 +6,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/sync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/mailsync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type CalendarEngine struct {
 	store    *store.DB
-	client   gmail.Client
+	client   gws.Client
 	Progress func(format string, args ...any)
 }
 
-func NewCalendarEngine(s *store.DB, c gmail.Client) *CalendarEngine {
+func NewCalendarEngine(s *store.DB, c gws.Client) *CalendarEngine {
 	return &CalendarEngine{
 		store:  s,
 		client: c,
@@ -51,7 +51,7 @@ func (e *CalendarEngine) SyncCalendar(opts SyncOptions) (*SyncResult, error) {
 	now := time.Now()
 
 	// Parse past lookback
-	pastSec, err := sync.ParseSince(opts.Past)
+	pastSec, err := mailsync.ParseSince(opts.Past)
 	if err != nil {
 		return nil, fmt.Errorf("invalid past lookback: %w", err)
 	}
@@ -61,7 +61,7 @@ func (e *CalendarEngine) SyncCalendar(opts SyncOptions) (*SyncResult, error) {
 	}
 
 	// Parse future lookahead
-	futureSec, err := sync.ParseSince(opts.Future)
+	futureSec, err := mailsync.ParseSince(opts.Future)
 	if err != nil {
 		return nil, fmt.Errorf("invalid future lookahead: %w", err)
 	}
@@ -76,7 +76,7 @@ func (e *CalendarEngine) SyncCalendar(opts SyncOptions) (*SyncResult, error) {
 
 	storedState, _ := e.store.GetCalendarSyncState(calID)
 
-	params := gmail.CalendarListParams{
+	params := gws.CalendarListParams{
 		CalendarID: calID,
 	}
 
@@ -185,7 +185,7 @@ func (e *CalendarEngine) SyncCalendar(opts SyncOptions) (*SyncResult, error) {
 	return res, nil
 }
 
-func parseEventTimes(item gmail.CalendarEventDetail) (time.Time, time.Time) {
+func parseEventTimes(item gws.CalendarEventDetail) (time.Time, time.Time) {
 	var start, end time.Time
 
 	if item.Start.DateTime != "" {

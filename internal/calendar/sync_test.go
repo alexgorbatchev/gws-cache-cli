@@ -5,25 +5,25 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type mockCalendarClient struct {
-	resp      *gmail.CalendarEventsResponse
+	resp      *gws.CalendarEventsResponse
 	listErr   error
 	callCount int
 }
 
-func (m *mockCalendarClient) ListThreads(query string) ([]gmail.ThreadSummary, error) {
+func (m *mockCalendarClient) ListThreads(query string) ([]gws.ThreadSummary, error) {
 	return nil, nil
 }
 
-func (m *mockCalendarClient) GetThread(threadID string) (*gmail.ThreadDetail, error) {
+func (m *mockCalendarClient) GetThread(threadID string) (*gws.ThreadDetail, error) {
 	return nil, nil
 }
 
-func (m *mockCalendarClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.CalendarEventsResponse, error) {
+func (m *mockCalendarClient) ListCalendarEvents(p gws.CalendarListParams) (*gws.CalendarEventsResponse, error) {
 	m.callCount++
 	if m.listErr != nil {
 		return nil, m.listErr
@@ -35,7 +35,7 @@ func (m *mockCalendarClient) ListCalendarEvents(p gmail.CalendarListParams) (*gm
 		return m.resp, nil
 	}
 
-	evt1 := gmail.CalendarEventDetail{
+	evt1 := gws.CalendarEventDetail{
 		ID:          "evt-1",
 		Status:      "confirmed",
 		Summary:     "Call with Newsletters",
@@ -44,20 +44,20 @@ func (m *mockCalendarClient) ListCalendarEvents(p gmail.CalendarListParams) (*gm
 	evt1.Start.DateTime = "2026-07-29T11:00:00Z"
 	evt1.End.DateTime = "2026-07-29T12:00:00Z"
 	evt1.Organizer.Email = "editor@newsletter.com"
-	evt1.Attendees = []gmail.CalendarAttendee{
+	evt1.Attendees = []gws.CalendarAttendee{
 		{Email: "editor@newsletter.com", DisplayName: "Editor"},
 	}
 
-	evt2 := gmail.CalendarEventDetail{
+	evt2 := gws.CalendarEventDetail{
 		ID:     "evt-2",
 		Status: "cancelled",
 	}
 	evt2.Start.Date = "2026-07-27"
 	evt2.End.Date = "2026-07-27"
 
-	return &gmail.CalendarEventsResponse{
+	return &gws.CalendarEventsResponse{
 		NextSyncToken: "sync-100",
-		Items:         []gmail.CalendarEventDetail{evt1, evt2},
+		Items:         []gws.CalendarEventDetail{evt1, evt2},
 	}, nil
 }
 
@@ -131,7 +131,7 @@ func TestCalendarEngine(t *testing.T) {
 
 func TestParseEventTimes(t *testing.T) {
 	// All day event
-	itemDate := gmail.CalendarEventDetail{}
+	itemDate := gws.CalendarEventDetail{}
 	itemDate.Start.Date = "2026-08-15"
 	itemDate.End.Date = "2026-08-16"
 	start, end := parseEventTimes(itemDate)
@@ -140,7 +140,7 @@ func TestParseEventTimes(t *testing.T) {
 	}
 
 	// Empty event fallback
-	itemEmpty := gmail.CalendarEventDetail{}
+	itemEmpty := gws.CalendarEventDetail{}
 	startEmpty, endEmpty := parseEventTimes(itemEmpty)
 	if startEmpty.IsZero() || endEmpty.IsZero() {
 		t.Fatal("expected non-zero fallback dates")

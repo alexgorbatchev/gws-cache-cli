@@ -6,15 +6,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
 )
 
 type mockCLIClient struct {
-	gmail.CLIClient
+	gws.CLIClient
 }
 
-func (m *mockCLIClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.CalendarEventsResponse, error) {
-	evt := gmail.CalendarEventDetail{
+func (m *mockCLIClient) ListCalendarEvents(p gws.CalendarListParams) (*gws.CalendarEventsResponse, error) {
+	evt := gws.CalendarEventDetail{
 		ID:      "evt-1",
 		Status:  "confirmed",
 		Summary: "Call with Newsletters",
@@ -22,31 +22,31 @@ func (m *mockCLIClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.C
 	evt.Start.DateTime = "2026-07-29T11:00:00Z"
 	evt.End.DateTime = "2026-07-29T12:00:00Z"
 
-	return &gmail.CalendarEventsResponse{
+	return &gws.CalendarEventsResponse{
 		NextSyncToken: "sync-100",
-		Items:         []gmail.CalendarEventDetail{evt},
+		Items:         []gws.CalendarEventDetail{evt},
 	}, nil
 }
 
-func (m *mockCLIClient) ListThreads(query string) ([]gmail.ThreadSummary, error) {
-	return []gmail.ThreadSummary{
+func (m *mockCLIClient) ListThreads(query string) ([]gws.ThreadSummary, error) {
+	return []gws.ThreadSummary{
 		{ID: "t-1", HistoryID: "100", Snippet: "Weekly Tech Digest"},
 	}, nil
 }
 
-func (m *mockCLIClient) GetThread(threadID string) (*gmail.ThreadDetail, error) {
-	return &gmail.ThreadDetail{
+func (m *mockCLIClient) GetThread(threadID string) (*gws.ThreadDetail, error) {
+	return &gws.ThreadDetail{
 		ID:        "t-1",
 		HistoryID: "100",
-		Messages: []gmail.MessageDetail{
+		Messages: []gws.MessageDetail{
 			{
 				ID:           "m-1",
 				ThreadID:     "t-1",
 				HistoryID:    "100",
 				InternalDate: "1770000000000",
 				Snippet:      "Here is your newsletter.",
-				Payload: gmail.Payload{
-					Headers: []gmail.Header{
+				Payload: gws.Payload{
+					Headers: []gws.Header{
 						{Name: "From", Value: "editor@tech.com"},
 						{Name: "Subject", Value: "Tech Weekly #1"},
 						{Name: "Date", Value: "Mon, 20 Jul 2026 13:00:00 -0700"},
@@ -61,7 +61,7 @@ func TestCLICommands(t *testing.T) {
 	tmpDir := t.TempDir()
 	testDB := filepath.Join(tmpDir, "test.db")
 
-	newClient = func() gmail.Client {
+	newClient = func() gws.Client {
 		return &mockCLIClient{}
 	}
 

@@ -1,22 +1,22 @@
-package sync
+package mailsync
 
 import (
 	"fmt"
 	"strconv"
 	"time"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/classifier"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/classifier"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type Engine struct {
 	store    *store.DB
-	client   gmail.Client
+	client   gws.Client
 	Progress func(format string, args ...any)
 }
 
-func NewEngine(s *store.DB, c gmail.Client) *Engine {
+func NewEngine(s *store.DB, c gws.Client) *Engine {
 	return &Engine{
 		store:  s,
 		client: c,
@@ -102,7 +102,7 @@ func (e *Engine) doSyncTopic(top *store.Topic, opts SyncOptions) (*SyncResult, e
 		cutoffSec = cSec
 	}
 
-	var allThreads []gmail.ThreadSummary
+	var allThreads []gws.ThreadSummary
 	seenThreadIDs := make(map[string]bool)
 
 	for _, q := range queries {

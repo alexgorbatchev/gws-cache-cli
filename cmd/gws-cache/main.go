@@ -6,21 +6,21 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/calendar"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/exporter"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/scan"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/sync"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/topic"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/calendar"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/exporter"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/mailsync"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/scan"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/topic"
 )
 
 var (
 	version = "dev"
 	dbPath  string
 
-	newClient = func() gmail.Client {
-		return gmail.NewCLIClient()
+	newClient = func() gws.Client {
+		return gws.NewCLIClient()
 	}
 )
 
@@ -162,12 +162,12 @@ func newSyncCmd() *cobra.Command {
 			defer db.Close()
 
 			client := newClient()
-			engine := sync.NewEngine(db, client)
+			engine := mailsync.NewEngine(db, client)
 			engine.Progress = func(format string, a ...any) {
 				cmd.PrintErrf("[gws-cache] "+format+"\n", a...)
 			}
 
-			opts := sync.SyncOptions{
+			opts := mailsync.SyncOptions{
 				ForceFull:  forceFull,
 				Since:      since,
 				MaxThreads: maxThreads,
@@ -270,7 +270,7 @@ func newCalendarCmd() *cobra.Command {
 				topicSlug = args[0]
 			}
 
-			sinceSec, _ := sync.ParseSince(since)
+			sinceSec, _ := mailsync.ParseSince(since)
 			events, err := db.ListCalendarEvents(calendarID, topicSlug, sinceSec)
 			if err != nil {
 				return err

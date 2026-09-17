@@ -1,40 +1,40 @@
-package sync
+package mailsync
 
 import (
 	"errors"
 	"path/filepath"
 	"testing"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type mockGmailClient struct {
-	threads      []gmail.ThreadSummary
-	details      map[string]*gmail.ThreadDetail
+	threads      []gws.ThreadSummary
+	details      map[string]*gws.ThreadDetail
 	listErr      error
 	getThreadErr error
 }
 
-func (m *mockGmailClient) ListThreads(query string) ([]gmail.ThreadSummary, error) {
+func (m *mockGmailClient) ListThreads(query string) ([]gws.ThreadSummary, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
 	return m.threads, nil
 }
 
-func (m *mockGmailClient) GetThread(threadID string) (*gmail.ThreadDetail, error) {
+func (m *mockGmailClient) GetThread(threadID string) (*gws.ThreadDetail, error) {
 	if m.getThreadErr != nil {
 		return nil, m.getThreadErr
 	}
 	if detail, ok := m.details[threadID]; ok {
 		return detail, nil
 	}
-	return &gmail.ThreadDetail{ID: threadID}, nil
+	return &gws.ThreadDetail{ID: threadID}, nil
 }
 
-func (m *mockGmailClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.CalendarEventsResponse, error) {
-	return &gmail.CalendarEventsResponse{}, nil
+func (m *mockGmailClient) ListCalendarEvents(p gws.CalendarListParams) (*gws.CalendarEventsResponse, error) {
+	return &gws.CalendarEventsResponse{}, nil
 }
 
 func TestSyncEngine(t *testing.T) {
@@ -54,23 +54,23 @@ func TestSyncEngine(t *testing.T) {
 	_ = top
 
 	mockClient := &mockGmailClient{
-		threads: []gmail.ThreadSummary{
+		threads: []gws.ThreadSummary{
 			{ID: "t1", HistoryID: "100", Snippet: "Weekly Tech Digest"},
 			{ID: "t2", HistoryID: "101", Snippet: "Second Digest"},
 		},
-		details: map[string]*gmail.ThreadDetail{
+		details: map[string]*gws.ThreadDetail{
 			"t1": {
 				ID:        "t1",
 				HistoryID: "100",
-				Messages: []gmail.MessageDetail{
+				Messages: []gws.MessageDetail{
 					{
 						ID:           "m1",
 						ThreadID:     "t1",
 						HistoryID:    "100",
 						InternalDate: "1770000000000",
 						Snippet:      "Here is your newsletter.",
-						Payload: gmail.Payload{
-							Headers: []gmail.Header{
+						Payload: gws.Payload{
+							Headers: []gws.Header{
 								{Name: "Date", Value: "Mon, 20 Jul 2026 13:00:00 -0700"},
 								{Name: "From", Value: "Editor <editor@newsletter.com>"},
 								{Name: "To", Value: "alex@gmail.com"},
@@ -83,7 +83,7 @@ func TestSyncEngine(t *testing.T) {
 			"t2": {
 				ID:        "t2",
 				HistoryID: "101",
-				Messages: []gmail.MessageDetail{
+				Messages: []gws.MessageDetail{
 					{
 						ID:           "m2",
 						ThreadID:     "t2",
@@ -159,7 +159,7 @@ func TestSyncEngine(t *testing.T) {
 
 	// Get thread warning/skip test on uncached thread
 	mockClient.getThreadErr = errors.New("get thread warning")
-	mockClient.threads = []gmail.ThreadSummary{
+	mockClient.threads = []gws.ThreadSummary{
 		{ID: "t999", HistoryID: "999", Snippet: "Uncached thread"},
 	}
 	resWarn, err := engine.SyncTopic("newsletters", SyncOptions{MaxThreads: 10})

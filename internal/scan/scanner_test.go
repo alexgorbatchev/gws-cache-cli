@@ -7,36 +7,36 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
-	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
 )
 
 type mockGmailClient struct {
-	threads      []gmail.ThreadSummary
-	details      map[string]*gmail.ThreadDetail
+	threads      []gws.ThreadSummary
+	details      map[string]*gws.ThreadDetail
 	listErr      error
 	getThreadErr error
 }
 
-func (m *mockGmailClient) ListThreads(query string) ([]gmail.ThreadSummary, error) {
+func (m *mockGmailClient) ListThreads(query string) ([]gws.ThreadSummary, error) {
 	if m.listErr != nil {
 		return nil, m.listErr
 	}
 	return m.threads, nil
 }
 
-func (m *mockGmailClient) GetThread(threadID string) (*gmail.ThreadDetail, error) {
+func (m *mockGmailClient) GetThread(threadID string) (*gws.ThreadDetail, error) {
 	if m.getThreadErr != nil {
 		return nil, m.getThreadErr
 	}
 	if detail, ok := m.details[threadID]; ok {
 		return detail, nil
 	}
-	return &gmail.ThreadDetail{ID: threadID}, nil
+	return &gws.ThreadDetail{ID: threadID}, nil
 }
 
-func (m *mockGmailClient) ListCalendarEvents(p gmail.CalendarListParams) (*gmail.CalendarEventsResponse, error) {
-	return &gmail.CalendarEventsResponse{}, nil
+func (m *mockGmailClient) ListCalendarEvents(p gws.CalendarListParams) (*gws.CalendarEventsResponse, error) {
+	return &gws.CalendarEventsResponse{}, nil
 }
 
 func TestScanner(t *testing.T) {
@@ -57,23 +57,23 @@ func TestScanner(t *testing.T) {
 
 	nowMs := time.Now().UnixMilli()
 	mockClient := &mockGmailClient{
-		threads: []gmail.ThreadSummary{
+		threads: []gws.ThreadSummary{
 			{ID: "scan-t10000", HistoryID: "500", Snippet: "Weekly Newsletter"},
 			{ID: "scan-t2", HistoryID: "501", Snippet: "Second Newsletter"},
 		},
-		details: map[string]*gmail.ThreadDetail{
+		details: map[string]*gws.ThreadDetail{
 			"scan-t10000": {
 				ID:        "scan-t10000",
 				HistoryID: "500",
-				Messages: []gmail.MessageDetail{
+				Messages: []gws.MessageDetail{
 					{
 						ID:           "scan-m1",
 						ThreadID:     "scan-t10000",
 						HistoryID:    "500",
 						InternalDate: fmt.Sprintf("%d", nowMs),
 						Snippet:      "Tech newsletter issue",
-						Payload: gmail.Payload{
-							Headers: []gmail.Header{
+						Payload: gws.Payload{
+							Headers: []gws.Header{
 								{Name: "From", Value: "'Editor' <editor@tech.com>"},
 								{Name: "Subject", Value: "Tech Weekly #1"},
 								{Name: "Date", Value: "Mon, 20 Jul 2026 13:00:00 -0700"},
@@ -85,15 +85,15 @@ func TestScanner(t *testing.T) {
 			"scan-t2": {
 				ID:        "scan-t2",
 				HistoryID: "501",
-				Messages: []gmail.MessageDetail{
+				Messages: []gws.MessageDetail{
 					{
 						ID:           "scan-m2",
 						ThreadID:     "scan-t2",
 						HistoryID:    "501",
 						InternalDate: "0",
 						Snippet:      "Automated notification",
-						Payload: gmail.Payload{
-							Headers: []gmail.Header{
+						Payload: gws.Payload{
+							Headers: []gws.Header{
 								{Name: "From", Value: "no-reply@tech.com"},
 								{Name: "Subject", Value: "Automated alert"},
 								{Name: "Auto-Submitted", Value: "auto-generated"},
@@ -149,7 +149,7 @@ func TestScanner(t *testing.T) {
 
 	// GetThread warning branch
 	mockClient.getThreadErr = errors.New("get thread error")
-	mockClient.threads = []gmail.ThreadSummary{{ID: "t-uncached", HistoryID: "999"}}
+	mockClient.threads = []gws.ThreadSummary{{ID: "t-uncached", HistoryID: "999"}}
 	resWarn, err := scanner.ScanInbox(ScanOptions{})
 	if err != nil {
 		t.Fatalf("ScanInbox warning branch failed: %v", err)
