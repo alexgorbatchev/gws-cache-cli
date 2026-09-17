@@ -45,7 +45,7 @@
 Download the archive for your platform from the [latest release](https://github.com/alexgorbatchev/gws-cache-cli/releases/latest), unpack it and move the binary onto your `PATH`. For example, on macOS with Apple Silicon:
 
 ```bash
-curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/latest/download/gws-cache_1.0.0_darwin_arm64.tar.gz | tar -xz
+curl -L https://github.com/alexgorbatchev/gws-cache-cli/releases/download/v2.0.0/gws-cache_2.0.0_darwin_arm64.tar.gz | tar -xz
 sudo mv gws-cache /usr/local/bin/
 ```
 
