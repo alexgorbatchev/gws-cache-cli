@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // binaryName is the executable resolved on PATH for every call.
@@ -17,6 +18,11 @@ const binaryName = "gws"
 
 // DefaultCalendarID is the calendar used when a request names none.
 const DefaultCalendarID = "primary"
+
+// pipeShutdownGrace bounds how long a cancelled command may take to release
+// its output pipe before it is forced closed, so a deadline always returns
+// control to the caller.
+const pipeShutdownGrace = 2 * time.Second
 
 // maxPages bounds pagination so that a server returning an endless stream of
 // page tokens cannot spin forever. At Gmail's 100 results per page this is far
@@ -240,8 +246,20 @@ func (c *Client) ListCalendarEvents(ctx context.Context, p CalendarListParams) (
 // wrote to stderr is folded into the error, because that is where gws reports
 // authentication and quota problems the user needs to act on.
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, binaryName, args...).Output()
-	if err == nil {
+	cmd := exec.CommandContext(ctx, binaryName, args...)
+
+	// Cancelling the context kills gws itself, but with a zero WaitDelay the
+	// output pipe is still read until EOF — and any helper process gws spawned
+	// inherits that pipe and can hold it open long after gws is gone. gws is a
+	// Node program that does exactly this, so without a delay the --timeout
+	// deadline would pass without returning control. The delay bounds how long
+	// cleanup may take before the pipes are forced closed.
+	cmd.WaitDelay = pipeShutdownGrace
+
+	out, err := cmd.Output()
+	// ErrWaitDelay only accompanies an otherwise successful exit: the command
+	// worked and only the pipe cleanup overran. The output stands.
+	if err == nil || errors.Is(err, exec.ErrWaitDelay) {
 		return out, nil
 	}
 

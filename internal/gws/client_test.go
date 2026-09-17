@@ -173,6 +173,11 @@ func TestListThreadsRejectsInvalidJSON(t *testing.T) {
 }
 
 func TestListThreadsHonoursContextCancellation(t *testing.T) {
+	// Depending on the shell, killing this leaves `sleep` orphaned holding the
+	// output pipe, which is the shape a real `gws` takes: a Node program whose
+	// helpers inherit the pipe. Reading it to EOF would outlast any deadline.
+	// Linux reproduces that reliably; some macOS shells exec the sleep and do
+	// not, so CI is the real guard here.
 	fakeGWS(t, `sleep 30`)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
@@ -182,7 +187,9 @@ func TestListThreadsHonoursContextCancellation(t *testing.T) {
 	if _, err := New().ListThreads(ctx, "q"); err == nil {
 		t.Fatal("ListThreads should fail when the context deadline passes")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	// Generous next to the 50ms deadline, but far below the 30s the fake would
+	// otherwise hold the pipe for.
+	if elapsed := time.Since(start); elapsed > 3*pipeShutdownGrace {
 		t.Fatalf("ListThreads ignored context cancellation (took %s)", elapsed)
 	}
 }
