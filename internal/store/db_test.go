@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func TestStoreOperations(t *testing.T) {
 	}
 
 	// 3. Upsert Thread and HasThreadWithHistory
-	if err := db.UpsertThread("t-101", top.ID, "hist-101", "Newsletter issue #1"); err != nil {
+	if err := db.UpsertThread("t-101", &top.ID, "hist-101", "Newsletter issue #1"); err != nil {
 		t.Fatalf("UpsertThread failed: %v", err)
 	}
 	hasThread, err := db.HasThreadWithHistory("t-101", "hist-101")
@@ -99,7 +100,7 @@ func TestStoreOperations(t *testing.T) {
 	}
 
 	// UpsertThread with topic_id 0 updates existing without changing topic_id
-	if err := db.UpsertThread("t-101", 0, "hist-102", "Updated snippet"); err != nil {
+	if err := db.UpsertThread("t-101", nil, "hist-102", "Updated snippet"); err != nil {
 		t.Fatalf("UpsertThread update failed: %v", err)
 	}
 
@@ -107,7 +108,7 @@ func TestStoreOperations(t *testing.T) {
 	msg := &Message{
 		ID:                   "m-101",
 		ThreadID:             "t-101",
-		TopicID:              top.ID,
+		TopicID:              &top.ID,
 		InternalDate:         1770000000000,
 		DateISO:              "2026-02-01T12:00:00Z",
 		FromAddress:          "editor@newsletter.com",
@@ -125,7 +126,7 @@ func TestStoreOperations(t *testing.T) {
 
 	// UpsertMessage update with topic_id 0
 	msg.Snippet = "Updated snippet content"
-	msg.TopicID = 0
+	msg.TopicID = nil
 	if err := db.UpsertMessage(msg); err != nil {
 		t.Fatalf("UpsertMessage update failed: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestStoreOperations(t *testing.T) {
 	}
 
 	// 8. Start and Complete Sync Run
-	runID, err := db.StartSyncRun(top.ID)
+	runID, err := db.StartSyncRun(&top.ID)
 	if err != nil {
 		t.Fatalf("StartSyncRun failed: %v", err)
 	}
@@ -219,23 +220,23 @@ func TestStoreOperations(t *testing.T) {
 		t.Fatalf("UpsertCalendarEvent no topic failed: %v", err)
 	}
 
-	events, err := db.ListCalendarEvents("primary", "newsletters", 1000)
+	events, err := db.SearchCalendarEvents("", "primary", "newsletters", 1000)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("ListCalendarEvents failed: %v, count: %d", err, len(events))
 	}
 
-	eventsAll, err := db.ListCalendarEvents("", "", 0)
+	eventsAll, err := db.SearchCalendarEvents("", "", "", 0)
 	if err != nil || len(eventsAll) != 2 {
 		t.Fatalf("ListCalendarEvents all failed: %v, count: %d", err, len(eventsAll))
 	}
 
 	// 10. Stats
-	topicsCount, threadsCount, msgsCount, err := db.Stats()
+	stats, err := db.Stats()
 	if err != nil {
 		t.Fatalf("Stats failed: %v", err)
 	}
-	if topicsCount != 2 || threadsCount != 1 || msgsCount != 1 {
-		t.Fatalf("unexpected stats: topics=%d, threads=%d, msgs=%d", topicsCount, threadsCount, msgsCount)
+	if want := (Stats{Topics: 2, Threads: 1, Messages: 1}); stats != want {
+		t.Fatalf("Stats = %+v, want %+v", stats, want)
 	}
 
 	// 11. Delete Topic
@@ -273,7 +274,7 @@ func TestStoreErrorsOnClosedDB(t *testing.T) {
 	if err := db.UpdateCalendarSyncState(&CalendarSyncState{CalendarID: "c"}); err == nil {
 		t.Fatal("expected error on closed db")
 	}
-	if _, err := db.ListCalendarEvents("c", "s", 0); err == nil {
+	if _, err := db.SearchCalendarEvents("", "c", "s", 0); err == nil {
 		t.Fatal("expected error on closed db")
 	}
 	if _, err := db.CreateTopic("s", "n", "q"); err == nil {
@@ -291,7 +292,7 @@ func TestStoreErrorsOnClosedDB(t *testing.T) {
 	if _, err := db.ListQueries(1); err == nil {
 		t.Fatal("expected error on closed db")
 	}
-	if err := db.UpsertThread("t", 1, "h", "s"); err == nil {
+	if err := db.UpsertThread("t", nil, "h", "s"); err == nil {
 		t.Fatal("expected error on closed db")
 	}
 	if err := db.UpsertMessage(&Message{ID: "m"}); err == nil {
@@ -306,14 +307,120 @@ func TestStoreErrorsOnClosedDB(t *testing.T) {
 	if _, err := db.SearchMessages("k", "s", false, 0); err == nil {
 		t.Fatal("expected error on closed db")
 	}
-	if _, err := db.StartSyncRun(1); err == nil {
+	if _, err := db.StartSyncRun(nil); err == nil {
 		t.Fatal("expected error on closed db")
 	}
 	if err := db.CompleteSyncRun(1, "f", 0, 0, "", ""); err == nil {
 		t.Fatal("expected error on closed db")
 	}
-	if _, _, _, err := db.Stats(); err == nil {
+	if _, err := db.Stats(); err == nil {
 		t.Fatal("expected error on closed db")
+	}
+	if _, err := db.MaxMessageInternalDate(1); err == nil {
+		t.Fatal("expected error on closed db")
+	}
+}
+
+func TestTopicNotFoundIsASentinel(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "sentinel.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.GetTopicBySlug("absent")
+	if !errors.Is(err, ErrTopicNotFound) {
+		t.Fatalf("GetTopicBySlug error = %v, want it to wrap ErrTopicNotFound", err)
+	}
+
+	if err := db.DeleteTopic("absent"); !errors.Is(err, ErrTopicNotFound) {
+		t.Fatalf("DeleteTopic error = %v, want it to wrap ErrTopicNotFound", err)
+	}
+}
+
+func TestMaxMessageInternalDate(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "watermark.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	top, err := db.CreateTopic("news", "News", "q")
+	if err != nil {
+		t.Fatalf("CreateTopic failed: %v", err)
+	}
+
+	got, err := db.MaxMessageInternalDate(top.ID)
+	if err != nil {
+		t.Fatalf("MaxMessageInternalDate failed: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("an empty topic should report zero, got %d", got)
+	}
+
+	if err := db.UpsertThread("t-1", &top.ID, "h", "s"); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+	for id, millis := range map[string]int64{"m-1": 1_700_000_000_000, "m-2": 1_800_000_000_000} {
+		if err := db.UpsertMessage(&Message{
+			ID: id, ThreadID: "t-1", TopicID: &top.ID,
+			InternalDate: millis,
+			DateISO:      time.UnixMilli(millis).UTC().Format(time.RFC3339),
+			FromAddress:  "a@example.com", ToAddress: "b@example.com",
+			Subject: id, Snippet: id,
+		}); err != nil {
+			t.Fatalf("UpsertMessage failed: %v", err)
+		}
+	}
+
+	got, err = db.MaxMessageInternalDate(top.ID)
+	if err != nil {
+		t.Fatalf("MaxMessageInternalDate failed: %v", err)
+	}
+	if got != 1_800_000_000_000 {
+		t.Fatalf("MaxMessageInternalDate = %d, want the newest cached message", got)
+	}
+}
+
+func TestListMessagesByTopicFiltersByWindow(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "window.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	top, err := db.CreateTopic("news", "News", "q")
+	if err != nil {
+		t.Fatalf("CreateTopic failed: %v", err)
+	}
+	if err := db.UpsertThread("t-1", &top.ID, "h-1", "s"); err != nil {
+		t.Fatalf("UpsertThread failed: %v", err)
+	}
+
+	const oldSeconds, newSeconds = 1_700_000_000, 1_800_000_000
+	for id, seconds := range map[string]int64{"m-old": oldSeconds, "m-new": newSeconds} {
+		if err := db.UpsertMessage(&Message{
+			ID: id, ThreadID: "t-1", TopicID: &top.ID,
+			InternalDate: seconds * 1000,
+			DateISO:      time.Unix(seconds, 0).UTC().Format(time.RFC3339),
+			FromAddress:  "a@example.com", ToAddress: "b@example.com",
+			Subject: id, Snippet: id,
+		}); err != nil {
+			t.Fatalf("UpsertMessage failed: %v", err)
+		}
+	}
+
+	all, err := db.ListMessagesByTopic(top.ID, false, 0)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("unfiltered list = %d messages, err %v", len(all), err)
+	}
+
+	recent, err := db.ListMessagesByTopic(top.ID, false, newSeconds-1)
+	if err != nil {
+		t.Fatalf("filtered list failed: %v", err)
+	}
+	if len(recent) != 1 || recent[0].ID != "m-new" {
+		t.Fatalf("filtered list = %+v, want only m-new", recent)
 	}
 }
 

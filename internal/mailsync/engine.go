@@ -1,334 +1,400 @@
+// Package mailsync keeps the local cache up to date with Gmail using a
+// high-watermark incremental sync per tracked topic.
 package mailsync
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/alexgorbatchev/gws-cache-cli/internal/classifier"
 	"github.com/alexgorbatchev/gws-cache-cli/internal/gws"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/message"
 	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/timewindow"
 )
 
-type Engine struct {
-	store    *store.DB
-	client   gws.Client
-	Progress func(format string, args ...any)
+const (
+	// DefaultMaxThreads caps how many threads a single sync will fetch when
+	// the caller does not set a limit.
+	DefaultMaxThreads = 25
+
+	// warmStartBuffer overlaps each incremental sync with the previous one, so
+	// messages that arrived while the last sync was running are not missed.
+	warmStartBuffer = 24 * time.Hour
+
+	// gmailDateLayout is the date format accepted by Gmail's "after:" operator.
+	gmailDateLayout = "2006-01-02"
+
+	statusSuccess = "success"
+	statusFailed  = "failed"
+)
+
+// ThreadFetcher is the part of the gws client this engine depends on.
+type ThreadFetcher interface {
+	ListThreads(ctx context.Context, query string) ([]gws.ThreadSummary, error)
+	GetThread(ctx context.Context, threadID string) (*gws.ThreadDetail, error)
 }
 
-func NewEngine(s *store.DB, c gws.Client) *Engine {
-	return &Engine{
-		store:  s,
-		client: c,
-		Progress: func(format string, args ...any) {
-			// default no-op
-		},
-	}
+// Options controls a single sync.
+type Options struct {
+	// ForceFull re-fetches every thread in the window, ignoring the cached
+	// history IDs and the incremental watermark.
+	ForceFull bool
+
+	// Since bounds how far back to look.
+	Since timewindow.Window
+
+	// SinceExplicit reports whether the user chose the window themselves. An
+	// explicit window always wins, so that asking for a wider lookback reaches
+	// further back than the incremental watermark would allow. Otherwise a
+	// previously synced topic resumes from its watermark and Since applies
+	// only to the first sync.
+	SinceExplicit bool
+
+	// MaxThreads caps the threads fetched per sync; zero means DefaultMaxThreads.
+	MaxThreads int
 }
 
-type SyncOptions struct {
-	ForceFull  bool
-	Since      string // "4w", "30d", "2026-06-01", "all"
-	MaxThreads int    // cap per sync
-}
+// Result reports what one sync accomplished.
+type Result struct {
+	// Target names what was synced: a topic slug, or the ad-hoc query when the
+	// run belonged to no saved search.
+	Target string `json:"target"`
 
-type SyncResult struct {
-	TopicSlug        string `json:"topic_slug"`
-	ThreadsFetched   int    `json:"threads_fetched"`
+	// ThreadsListed is how many unique conversations the window contained.
+	ThreadsListed int `json:"threads_listed"`
+
+	// ThreadsFetched is how many were newly downloaded during this run.
+	ThreadsFetched int `json:"threads_fetched"`
+
+	// ThreadsRemaining is how many uncached conversations this run's budget
+	// did not reach. While it is above zero the topic is incompletely cached,
+	// and the high-watermark is deliberately held back so a later run can
+	// still collect them.
+	ThreadsRemaining int `json:"threads_remaining"`
+
 	MessagesIngested int    `json:"messages_ingested"`
 	MaxHistoryID     string `json:"max_history_id"`
 	Error            string `json:"error,omitempty"`
 }
 
-func (e *Engine) SyncTopic(slug string, opts SyncOptions) (*SyncResult, error) {
-	top, err := e.store.GetTopicBySlug(slug)
+// Complete reports whether the window was fully cached by this run.
+func (r Result) Complete() bool { return r.ThreadsRemaining == 0 }
+
+// Engine synchronizes tracked topics into the cache.
+type Engine struct {
+	store    *store.DB
+	client   ThreadFetcher
+	ingestor *message.Ingestor
+
+	// Progress receives human-readable status lines. It is never nil.
+	Progress func(format string, args ...any)
+}
+
+// NewEngine returns an Engine writing to db, fetching through client and
+// classifying with rules.
+func NewEngine(db *store.DB, client ThreadFetcher, rules *classifier.Classifier) *Engine {
+	return &Engine{
+		store:    db,
+		client:   client,
+		ingestor: message.NewIngestor(db, rules),
+		Progress: func(string, ...any) {},
+	}
+}
+
+// SyncTopic synchronizes one topic, registering it first if it is not tracked
+// yet, and records the outcome as a sync run.
+func (e *Engine) SyncTopic(ctx context.Context, slug string, opts Options) (*Result, error) {
+	top, err := e.resolveTopic(slug)
 	if err != nil {
-		top, err = e.store.CreateTopic(slug, slug, "")
-		if err != nil {
-			return nil, fmt.Errorf("auto-registering topic %q: %w", slug, err)
-		}
+		return nil, err
 	}
 
-	runID, err := e.store.StartSyncRun(top.ID)
-	if err != nil {
-		return nil, fmt.Errorf("starting sync run: %w", err)
-	}
-
-	res, syncErr := e.doSyncTopic(top, opts)
+	res, syncErr := e.run(ctx, &top.ID, top.Slug, func() (*Result, error) {
+		return e.syncTopic(ctx, top, opts)
+	})
 	if syncErr != nil {
-		threadsFetched, msgsIngested := 0, 0
-		maxHistID := ""
-		if res != nil {
-			threadsFetched = res.ThreadsFetched
-			msgsIngested = res.MessagesIngested
-			maxHistID = res.MaxHistoryID
-		}
-		_ = e.store.CompleteSyncRun(runID, "failed", threadsFetched, msgsIngested, maxHistID, syncErr.Error())
 		return res, syncErr
 	}
-
-	_ = e.store.CompleteSyncRun(runID, "success", res.ThreadsFetched, res.MessagesIngested, res.MaxHistoryID, "")
 	return res, nil
 }
 
-func (e *Engine) doSyncTopic(top *store.Topic, opts SyncOptions) (*SyncResult, error) {
+// SyncQuery synchronizes an ad-hoc Gmail query. Nothing is registered and the
+// cached mail belongs to no saved search, which is what separates it from a
+// topic sync.
+func (e *Engine) SyncQuery(ctx context.Context, query string, opts Options) (*Result, error) {
+	return e.run(ctx, nil, query, func() (*Result, error) {
+		return e.syncQuery(ctx, query, opts)
+	})
+}
+
+// run brackets a sync with its run record, so that both entry points report
+// success and failure the same way.
+func (e *Engine) run(ctx context.Context, topicID *int64, target string, sync func() (*Result, error)) (*Result, error) {
+	runID, err := e.store.StartSyncRun(topicID)
+	if err != nil {
+		return nil, fmt.Errorf("starting sync run for %q: %w", target, err)
+	}
+
+	res, syncErr := sync()
+	if res == nil {
+		res = &Result{Target: target}
+	}
+
+	status, message := statusSuccess, ""
+	if syncErr != nil {
+		status, message = statusFailed, syncErr.Error()
+	}
+	if err := e.store.CompleteSyncRun(runID, status, res.ThreadsFetched, res.MessagesIngested, res.MaxHistoryID, message); err != nil {
+		e.Progress("Warning: could not record sync run %d: %v", runID, err)
+	}
+
+	return res, syncErr
+}
+
+// syncQuery caches the threads matching an ad-hoc query. There is no watermark
+// to keep, because nothing is tracking the query between runs.
+func (e *Engine) syncQuery(ctx context.Context, query string, opts Options) (*Result, error) {
+	now := time.Now()
+	res := &Result{Target: query}
+
+	threads, err := e.collectThreads(ctx, query, []string{query}, e.resolveCutoff(nil, opts, now))
+	if err != nil {
+		return res, err
+	}
+
+	res.ThreadsListed = len(threads)
+	e.Progress("Found %d conversation(s) for %q", len(threads), query)
+
+	if err := e.ingestThreads(ctx, nil, threads, res, now, maxThreads(opts)); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// resolveTopic loads a topic, creating it on demand. Only a genuine
+// "not found" registers a new topic: any other failure is a database problem
+// and must surface rather than silently produce a new row.
+func (e *Engine) resolveTopic(slug string) (*store.Topic, error) {
+	top, err := e.store.GetTopicBySlug(slug)
+	switch {
+	case err == nil:
+		return top, nil
+	case errors.Is(err, store.ErrTopicNotFound):
+		created, createErr := e.store.CreateTopic(slug, slug, "")
+		if createErr != nil {
+			return nil, fmt.Errorf("auto-registering topic %q: %w", slug, createErr)
+		}
+		return created, nil
+	default:
+		return nil, fmt.Errorf("looking up topic %q: %w", slug, err)
+	}
+}
+
+func (e *Engine) syncTopic(ctx context.Context, top *store.Topic, opts Options) (*Result, error) {
+	now := time.Now()
+	res := &Result{Target: top.Slug}
+
+	queries, err := e.resolveQueries(top)
+	if err != nil {
+		return res, err
+	}
+
+	threads, err := e.collectThreads(ctx, top.Slug, queries, e.resolveCutoff(top, opts, now))
+	if err != nil {
+		return res, err
+	}
+
+	res.ThreadsListed = len(threads)
+	e.Progress("Found %d conversation(s) for topic %q", len(threads), top.Slug)
+
+	if err := e.ingestThreads(ctx, &top.ID, threads, res, now, maxThreads(opts)); err != nil {
+		return res, err
+	}
+
+	// Advancing the watermark past conversations this run never collected
+	// would strand them: every later incremental sync starts after them, and
+	// not even a full re-sync looks that far back again. So the mark only
+	// moves once the window is completely cached. Passing zero still records
+	// that a sync ran, without moving the mark.
+	var watermark int64
+	if res.Complete() {
+		watermark, err = e.store.MaxMessageInternalDate(top.ID)
+		if err != nil {
+			return res, err
+		}
+	} else {
+		e.Progress("Holding the sync watermark for %q: %d conversation(s) still to collect", top.Slug, res.ThreadsRemaining)
+	}
+
+	if err := e.store.UpdateTopicSyncState(top.ID, res.MaxHistoryID, watermark); err != nil {
+		return res, fmt.Errorf("recording sync state for topic %q: %w", top.Slug, err)
+	}
+	return res, nil
+}
+
+// resolveQueries returns the Gmail queries that define a topic, falling back to
+// the topic's own query and finally its display name.
+func (e *Engine) resolveQueries(top *store.Topic) ([]string, error) {
 	queries, err := e.store.ListQueries(top.ID)
-	if err != nil || len(queries) == 0 {
-		if top.Query != "" {
-			queries = []string{top.Query}
-		} else {
-			queries = []string{top.DisplayName}
-		}
+	if err != nil {
+		return nil, fmt.Errorf("listing queries for topic %q: %w", top.Slug, err)
 	}
-
-	res := &SyncResult{
-		TopicSlug: top.Slug,
+	if len(queries) > 0 {
+		return queries, nil
 	}
-
-	maxThreads := opts.MaxThreads
-	if maxThreads <= 0 {
-		maxThreads = 25
+	if top.Query != "" {
+		return []string{top.Query}, nil
 	}
-
-	var cutoffSec int64
-	if !opts.ForceFull && top.LastSyncedAt != nil && top.LastMessageInternalDate > 0 {
-		// Warm start: 24 hour buffer before last internal date
-		cutoffSec = (top.LastMessageInternalDate / 1000) - 86400
-	} else if opts.Since != "" {
-		cSec, err := ParseSince(opts.Since)
-		if err != nil {
-			return res, fmt.Errorf("invalid since window %q: %w", opts.Since, err)
-		}
-		cutoffSec = cSec
-	}
-
-	var allThreads []gws.ThreadSummary
-	seenThreadIDs := make(map[string]bool)
-
-	for _, q := range queries {
-		queryStr := q
-		if cutoffSec > 0 {
-			afterStr := time.Unix(cutoffSec, 0).UTC().Format("2006-01-02")
-			queryStr = fmt.Sprintf("%s after:%s", q, afterStr)
-		}
-
-		e.Progress("Querying Gmail for topic %q: %q...", top.Slug, queryStr)
-		threads, err := e.client.ListThreads(queryStr)
-		if err != nil {
-			return res, fmt.Errorf("listing threads for query %q: %w", queryStr, err)
-		}
-
-		for _, t := range threads {
-			if !seenThreadIDs[t.ID] {
-				seenThreadIDs[t.ID] = true
-				allThreads = append(allThreads, t)
-			}
-		}
-	}
-
-	if len(allThreads) > maxThreads {
-		allThreads = allThreads[:maxThreads]
-		e.Progress("Capped to %d threads for sync", maxThreads)
-	}
-
-	res.ThreadsFetched = len(allThreads)
-	e.Progress("Fetched %d unique thread(s) for topic %q", len(allThreads), top.Slug)
-
-	var maxHistoryID string
-	var maxInternalDate int64
-
-	for i, tSummary := range allThreads {
-		// Pre-fetch check against SQLite cache: skip if thread exists and historyId matches
-		hasMatch, err := e.store.HasThreadWithHistory(tSummary.ID, tSummary.HistoryID)
-		if err == nil && hasMatch {
-			e.Progress("[%d/%d] Thread %s cached with history %s (skipped)", i+1, len(allThreads), tSummary.ID, tSummary.HistoryID)
-			continue
-		}
-
-		threadDetail, err := e.client.GetThread(tSummary.ID)
-		if err != nil {
-			e.Progress("Warning: skipping thread %s: %v", tSummary.ID, err)
-			continue
-		}
-
-		hID := threadDetail.HistoryID
-		if hID == "" {
-			hID = tSummary.HistoryID
-		}
-
-		if hID > maxHistoryID {
-			maxHistoryID = hID
-		}
-
-		if err := e.store.UpsertThread(threadDetail.ID, top.ID, hID, tSummary.Snippet); err != nil {
-			return res, fmt.Errorf("upserting thread %s: %w", threadDetail.ID, err)
-		}
-
-		for _, m := range threadDetail.Messages {
-			internalDate, _ := strconv.ParseInt(m.InternalDate, 10, 64)
-			if internalDate > maxInternalDate {
-				maxInternalDate = internalDate
-			}
-
-			dateStr := m.GetHeader("Date")
-			if dateStr == "" {
-				dateStr = time.Now().Format(time.RFC3339)
-			}
-			dateISO := parseISO(dateStr, internalDate)
-
-			from := m.GetHeader("From")
-			fromAddr, fromName := parseAddress(from)
-			toAddr := m.GetHeader("To")
-			subject := m.GetHeader("Subject")
-
-			headersMap := m.HeaderMap()
-			cls := classifier.Classify(from, subject, m.Snippet, headersMap)
-
-			msgRecord := &store.Message{
-				ID:                   m.ID,
-				ThreadID:             threadDetail.ID,
-				TopicID:              top.ID,
-				InternalDate:         internalDate,
-				DateISO:              dateISO,
-				FromAddress:          fromAddr,
-				FromName:             fromName,
-				ToAddress:            toAddr,
-				Subject:              subject,
-				Snippet:              m.Snippet,
-				BodyPlain:            m.Snippet, // store snippet as plain body for now
-				IsAutomated:          cls.IsAutomated,
-				ClassificationReason: cls.Reason,
-			}
-
-			if err := e.store.UpsertMessage(msgRecord); err != nil {
-				return res, fmt.Errorf("upserting message %s: %w", m.ID, err)
-			}
-			res.MessagesIngested++
-		}
-
-		e.Progress("[%d/%d] Ingested thread %s (%d msgs)", i+1, len(allThreads), tSummary.ID, len(threadDetail.Messages))
-	}
-
-	res.MaxHistoryID = maxHistoryID
-	_ = e.store.UpdateTopicSyncState(top.ID, maxHistoryID, maxInternalDate)
-
-	return res, nil
+	return []string{top.DisplayName}, nil
 }
 
-func (e *Engine) SyncAllTopics(opts SyncOptions) ([]SyncResult, error) {
+// resolveCutoff decides how far back this sync should reach. The second result
+// is false when no lower bound applies at all.
+func (e *Engine) resolveCutoff(top *store.Topic, opts Options, now time.Time) time.Time {
+	if opts.SinceExplicit {
+		if start, ok := opts.Since.Start(now); ok {
+			return start
+		}
+		return time.Time{}
+	}
+
+	warmStart := top != nil && !opts.ForceFull && top.LastSyncedAt != nil && top.LastMessageInternalDate > 0
+	if warmStart {
+		return time.UnixMilli(top.LastMessageInternalDate).Add(-warmStartBuffer).UTC()
+	}
+
+	if start, ok := opts.Since.Start(now); ok {
+		return start
+	}
+	return time.Time{}
+}
+
+func maxThreads(opts Options) int {
+	if opts.MaxThreads <= 0 {
+		return DefaultMaxThreads
+	}
+	return opts.MaxThreads
+}
+
+// collectThreads runs every query for a topic and returns the unique threads
+// the window contains. Nothing is dropped here: the per-run budget is spent in
+// ingestThreads, on the expensive fetches, so that a run which cannot finish
+// still leaves an accurate picture of what is outstanding.
+func (e *Engine) collectThreads(ctx context.Context, target string, queries []string, cutoff time.Time) ([]gws.ThreadSummary, error) {
+	var collected []gws.ThreadSummary
+	seen := make(map[string]bool)
+
+	for _, query := range queries {
+		scoped := query
+		if !cutoff.IsZero() {
+			scoped = fmt.Sprintf("%s after:%s", query, cutoff.UTC().Format(gmailDateLayout))
+		}
+
+		e.Progress("Querying Gmail for %q: %q...", target, scoped)
+		threads, err := e.client.ListThreads(ctx, scoped)
+		if err != nil {
+			return nil, fmt.Errorf("listing threads for %q: %w", target, err)
+		}
+
+		for _, thread := range threads {
+			if seen[thread.ID] {
+				continue
+			}
+			seen[thread.ID] = true
+			collected = append(collected, thread)
+		}
+	}
+
+	return collected, nil
+}
+
+// ingestThreads caches each thread that is not already stored at the same
+// history ID, spending at most budget fetches. Anything the budget does not
+// reach is counted in res.ThreadsRemaining rather than dropped, so the next
+// run can pick it up.
+func (e *Engine) ingestThreads(ctx context.Context, topicID *int64, threads []gws.ThreadSummary, res *Result, now time.Time, budget int) error {
+	spent := 0
+
+	for i, summary := range threads {
+		cached, err := e.store.HasThreadWithHistory(summary.ID, summary.HistoryID)
+		if err != nil {
+			return fmt.Errorf("checking cached thread %s: %w", summary.ID, err)
+		}
+		if cached {
+			e.Progress("[%d/%d] Thread %s cached at history %s (skipped)", i+1, len(threads), summary.ID, summary.HistoryID)
+			continue
+		}
+
+		// Cached conversations cost nothing, so the budget is spent only on
+		// ones that actually need downloading. Counting the rest instead of
+		// stopping keeps the reported backlog exact.
+		if spent >= budget {
+			res.ThreadsRemaining++
+			continue
+		}
+		spent++
+
+		detail, err := e.client.GetThread(ctx, summary.ID)
+		if err != nil {
+			// One unreadable thread should not abandon the whole sync, but a
+			// cancelled context means the user asked us to stop.
+			if ctx.Err() != nil {
+				return fmt.Errorf("fetching thread %s: %w", summary.ID, err)
+			}
+			e.Progress("Warning: skipping thread %s: %v", summary.ID, err)
+			continue
+		}
+
+		// Cache the history ID the *listing* reported, because that is the
+		// value the next listing is compared against. Storing the one that
+		// threads.get returns instead would leave a thread looking uncached
+		// whenever the two endpoints disagree, so every run would re-fetch it,
+		// spend the whole budget on it, and never drain the backlog.
+		historyID := summary.HistoryID
+		if historyID == "" {
+			historyID = detail.HistoryID
+		}
+		if detail.HistoryID > res.MaxHistoryID {
+			res.MaxHistoryID = detail.HistoryID
+		}
+
+		stats, err := e.ingestor.IngestThread(detail, topicID, historyID, summary.Snippet, now)
+		if err != nil {
+			return err
+		}
+		res.MessagesIngested += stats.MessagesIngested
+		res.ThreadsFetched++
+
+		e.Progress("[%d/%d] Ingested thread %s (%d msgs)", i+1, len(threads), summary.ID, stats.MessagesIngested)
+	}
+
+	return nil
+}
+
+// SyncAllTopics synchronizes every tracked topic, reporting per-topic failures
+// in the results rather than abandoning the remaining topics.
+func (e *Engine) SyncAllTopics(ctx context.Context, opts Options) ([]Result, error) {
 	topics, err := e.store.ListTopics()
 	if err != nil {
 		return nil, fmt.Errorf("listing topics: %w", err)
 	}
 
-	var results []SyncResult
+	results := make([]Result, 0, len(topics))
 	for _, top := range topics {
-		res, err := e.SyncTopic(top.Slug, opts)
-		if err != nil {
-			errStr := err.Error()
-			topicSlug := top.Slug
-			if res != nil && res.TopicSlug != "" {
-				topicSlug = res.TopicSlug
-			}
-			results = append(results, SyncResult{
-				TopicSlug: topicSlug,
-				Error:     errStr,
-			})
-		} else if res != nil {
+		res, err := e.SyncTopic(ctx, top.Slug, opts)
+		switch {
+		case err != nil:
+			results = append(results, Result{Target: top.Slug, Error: err.Error()})
+		case res != nil:
 			results = append(results, *res)
+		}
+		if ctx.Err() != nil {
+			return results, ctx.Err()
 		}
 	}
 
 	return results, nil
-}
-
-// ParseSince converts lookback duration string into Unix epoch seconds.
-func ParseSince(since string) (int64, error) {
-	if since == "" || since == "all" {
-		return 0, nil
-	}
-
-	now := time.Now()
-
-	// Try absolute ISO date format YYYY-MM-DD
-	if t, err := time.Parse("2006-01-02", since); err == nil {
-		return t.UTC().Unix(), nil
-	}
-
-	// Parse relative duration like 4w, 30d, 2m, 24h
-	unit := since[len(since)-1]
-	valStr := since[:len(since)-1]
-	val, err := strconv.Atoi(valStr)
-	if err != nil {
-		return 0, fmt.Errorf("invalid duration value %q: %w", valStr, err)
-	}
-
-	var d time.Duration
-	switch unit {
-	case 'h':
-		d = time.Duration(val) * time.Hour
-	case 'd':
-		d = time.Duration(val) * 24 * time.Hour
-	case 'w':
-		d = time.Duration(val) * 7 * 24 * time.Hour
-	case 'm':
-		d = time.Duration(val) * 30 * 24 * time.Hour
-	case 'y':
-		d = time.Duration(val) * 365 * 24 * time.Hour
-	default:
-		return 0, fmt.Errorf("unknown duration unit %q in %q", string(unit), since)
-	}
-
-	return now.Add(-d).UTC().Unix(), nil
-}
-
-func parseISO(dateStr string, internalDate int64) string {
-	if internalDate > 0 {
-		return time.UnixMilli(internalDate).UTC().Format(time.RFC3339)
-	}
-	t, err := time.Parse(time.RFC1123Z, dateStr)
-	if err == nil {
-		return t.UTC().Format(time.RFC3339)
-	}
-	return time.Now().UTC().Format(time.RFC3339)
-}
-
-func parseAddress(from string) (string, string) {
-	if from == "" {
-		return "", ""
-	}
-	if idx := len(from) - 1; from[idx] == '>' {
-		if start := len(from) - 2; start >= 0 {
-			for start >= 0 && from[start] != '<' {
-				start--
-			}
-			if start >= 0 {
-				addr := from[start+1 : len(from)-1]
-				name := from[:start]
-				name = trimQuotes(name)
-				return addr, name
-			}
-		}
-	}
-	return from, ""
-}
-
-func trimQuotes(s string) string {
-	s = trimSpace(s)
-	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') && s[len(s)-1] == s[0] {
-		return s[1 : len(s)-1]
-	}
-	return s
-}
-
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
 }

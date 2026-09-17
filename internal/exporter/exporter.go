@@ -1,13 +1,15 @@
+// Package exporter renders a topic's cached messages as a timeline.
 package exporter
 
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
-	"github.com/alexgorbatchev/gws-cache-cli/internal/mailsync"
 	"github.com/alexgorbatchev/gws-cache-cli/internal/store"
+	"github.com/alexgorbatchev/gws-cache-cli/internal/timewindow"
 )
 
 type Exporter struct {
@@ -18,10 +20,21 @@ func NewExporter(s *store.DB) *Exporter {
 	return &Exporter{store: s}
 }
 
+// Format selects the export rendering.
+type Format string
+
+const (
+	// FormatMarkdown renders a human-readable timeline.
+	FormatMarkdown Format = "markdown"
+	// FormatJSON renders a structured timeline.
+	FormatJSON Format = "json"
+)
+
+// Options controls an export.
 type Options struct {
 	HumanOnly bool
-	Format    string // "json" or "markdown"
-	Since     string // "4w", "30d", "2026-06-01", "all"
+	Format    Format
+	Since     timewindow.Window
 }
 
 type FormattedMessage struct {
@@ -41,13 +54,14 @@ func (e *Exporter) ExportTopic(slug string, opts Options) (string, error) {
 		return "", fmt.Errorf("getting topic %q: %w", slug, err)
 	}
 
-	sinceSec, _ := mailsync.ParseSince(opts.Since)
+	// An unbounded window yields zero, which the store reads as no date filter.
+	sinceSec, _ := opts.Since.StartUnix(time.Now())
 	msgs, err := e.store.ListMessagesByTopic(top.ID, opts.HumanOnly, sinceSec)
 	if err != nil {
 		return "", fmt.Errorf("listing messages: %w", err)
 	}
 
-	if strings.ToLower(opts.Format) == "json" {
+	if Format(strings.ToLower(string(opts.Format))) == FormatJSON {
 		return e.exportJSON(msgs)
 	}
 
@@ -116,12 +130,11 @@ func (e *Exporter) exportMarkdown(topicName string, msgs []store.Message) (strin
 	return sb.String(), nil
 }
 
+// cleanText flattens a snippet onto one line. Gmail snippets arrive HTML
+// escaped, so they are decoded in full rather than against a hand-written list
+// of the few entities that happened to come up.
 func cleanText(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "&#39;", "'")
-	s = strings.ReplaceAll(s, "&gt;", ">")
-	s = strings.ReplaceAll(s, "&lt;", "<")
-	s = strings.ReplaceAll(s, "&amp;", "&")
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(html.UnescapeString(s))
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,15 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrTopicNotFound is returned when a slug does not name a tracked topic.
+// Callers branch on it to tell "this topic does not exist yet" apart from a
+// genuine database failure, which must never be mistaken for the former.
+var ErrTopicNotFound = errors.New("topic not found")
+
+// millisPerSecond converts the epoch seconds used by window filters into the
+// epoch milliseconds Gmail stores in internal_date.
+const millisPerSecond = 1000
 
 // DefaultDBPath returns the default database file path following XDG Base Directory specification.
 func DefaultDBPath() string {
@@ -45,7 +55,7 @@ type Topic struct {
 type Message struct {
 	ID                   string    `json:"id"`
 	ThreadID             string    `json:"thread_id"`
-	TopicID              int64     `json:"topic_id"`
+	TopicID              *int64    `json:"topic_id,omitempty"`
 	InternalDate         int64     `json:"internal_date"`
 	DateISO              string    `json:"date_iso"`
 	FromAddress          string    `json:"from_address"`
@@ -110,7 +120,7 @@ func Open(dbPath string) (*DB, error) {
 
 	s := &DB{db: conn}
 	if err := s.init(); err != nil {
-		_ = conn.Close()
+		_ = conn.Close() // best-effort cleanup; the schema error below is what matters
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 
@@ -156,7 +166,7 @@ func (s *DB) init() error {
 
 	CREATE TABLE IF NOT EXISTS threads (
 		id TEXT PRIMARY KEY,
-		topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
 		history_id TEXT NOT NULL,
 		snippet TEXT,
 		last_synced_at DATETIME NOT NULL
@@ -165,7 +175,7 @@ func (s *DB) init() error {
 	CREATE TABLE IF NOT EXISTS messages (
 		id TEXT PRIMARY KEY,
 		thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-		topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
 		internal_date INTEGER NOT NULL,
 		date_iso TEXT NOT NULL,
 		from_address TEXT NOT NULL,
@@ -208,7 +218,7 @@ func (s *DB) init() error {
 
 	CREATE TABLE IF NOT EXISTS sync_runs (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
 		started_at DATETIME NOT NULL,
 		completed_at DATETIME,
 		status TEXT NOT NULL,
@@ -228,12 +238,6 @@ func (s *DB) init() error {
 		return fmt.Errorf("creating tables: %w", err)
 	}
 
-	// Ensure system "inbox-scan" topic exists for inbox scan ingestion
-	_, _ = s.db.Exec(`
-		INSERT OR IGNORE INTO topics (id, slug, display_name, query)
-		VALUES (0, 'inbox-scan', 'Inbox Scan', '')
-	`)
-
 	return nil
 }
 
@@ -247,7 +251,7 @@ func (s *DB) HasThreadWithHistory(threadID, historyID string) (bool, error) {
 }
 
 func (s *DB) UpsertCalendarEvent(e *CalendarEvent) error {
-	var topicIDVal interface{}
+	var topicIDVal any
 	if e.TopicID != nil {
 		topicIDVal = *e.TopicID
 	}
@@ -292,7 +296,7 @@ func (s *DB) GetCalendarSyncState(calendarID string) (*CalendarSyncState, error)
 	st := &CalendarSyncState{}
 	err := row.Scan(&st.CalendarID, &st.SyncToken, &st.LastSyncedAt, &st.WindowStart, &st.WindowEnd)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("getting calendar sync state for %s: %w", calendarID, err)
@@ -316,7 +320,9 @@ func (s *DB) UpdateCalendarSyncState(st *CalendarSyncState) error {
 	return nil
 }
 
-func (s *DB) ListCalendarEvents(calendarID, topicSlug string, sinceSec int64) ([]CalendarEvent, error) {
+// SearchCalendarEvents returns cached events matching the given filters. An
+// empty keyword matches everything, which is how a plain listing is expressed.
+func (s *DB) SearchCalendarEvents(keyword, calendarID, topicSlug string, sinceSec int64) ([]CalendarEvent, error) {
 	query := `
 		SELECT e.id, e.calendar_id, e.topic_id, e.summary, COALESCE(e.description, ''),
 		       COALESCE(e.location, ''), COALESCE(e.organizer_email, ''), e.start_time, e.end_time,
@@ -324,7 +330,7 @@ func (s *DB) ListCalendarEvents(calendarID, topicSlug string, sinceSec int64) ([
 		       COALESCE(e.i_cal_uid, ''), e.created_at, e.updated_at
 		FROM calendar_events e
 	`
-	var args []interface{}
+	var args []any
 	var where []string
 
 	if calendarID != "" {
@@ -335,6 +341,12 @@ func (s *DB) ListCalendarEvents(calendarID, topicSlug string, sinceSec int64) ([
 	if topicSlug != "" {
 		where = append(where, "e.topic_id IN (SELECT id FROM topics WHERE slug = ?)")
 		args = append(args, topicSlug)
+	}
+
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		where = append(where, "(e.summary LIKE ? OR e.description LIKE ? OR e.location LIKE ? OR e.organizer_email LIKE ?)")
+		args = append(args, like, like, like, like)
 	}
 
 	if sinceSec > 0 {
@@ -401,10 +413,12 @@ func (s *DB) CreateTopic(slug, displayName, query string) (*Topic, error) {
 		qStr = displayName
 	}
 
-	_, _ = s.db.Exec(`
+	if _, err := s.db.Exec(`
 		INSERT OR IGNORE INTO topic_queries (topic_id, query_string)
 		VALUES (?, ?)
-	`, id, qStr)
+	`, id, qStr); err != nil {
+		return nil, fmt.Errorf("seeding query for topic %q: %w", slug, err)
+	}
 
 	return s.GetTopicBySlug(slug)
 }
@@ -424,8 +438,8 @@ func (s *DB) GetTopicBySlug(slug string) (*Topic, error) {
 		&t.LastHistoryID, &t.LastMessageInternalDate, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("topic %q not found", slug)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%q: %w", slug, ErrTopicNotFound)
 		}
 		return nil, fmt.Errorf("scanning topic %q: %w", slug, err)
 	}
@@ -442,7 +456,7 @@ func (s *DB) ListTopics() ([]Topic, error) {
 		SELECT id, slug, display_name, query, last_synced_at, 
 		       COALESCE(last_history_id, ''), COALESCE(last_message_internal_date, 0),
 		       created_at, updated_at
-		FROM topics WHERE id != 0 ORDER BY slug ASC
+		FROM topics ORDER BY slug ASC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("querying topics: %w", err)
@@ -473,9 +487,12 @@ func (s *DB) DeleteTopic(slug string) error {
 	if err != nil {
 		return fmt.Errorf("deleting topic %q: %w", slug, err)
 	}
-	affected, _ := res.RowsAffected()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("counting rows deleted for topic %q: %w", slug, err)
+	}
 	if affected == 0 {
-		return fmt.Errorf("topic %q not found", slug)
+		return fmt.Errorf("%q: %w", slug, ErrTopicNotFound)
 	}
 	return nil
 }
@@ -509,12 +526,14 @@ func (s *DB) ListQueries(topicID int64) ([]string, error) {
 	return queries, rows.Err()
 }
 
-func (s *DB) UpsertThread(threadID string, topicID int64, historyID, snippet string) error {
+// UpsertThread caches a thread. A nil topicID means the thread was collected
+// by an ad-hoc query and belongs to no saved search.
+func (s *DB) UpsertThread(threadID string, topicID *int64, historyID, snippet string) error {
 	_, err := s.db.Exec(`
 		INSERT INTO threads (id, topic_id, history_id, snippet, last_synced_at)
 		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET
-			topic_id = CASE WHEN excluded.topic_id != 0 THEN excluded.topic_id ELSE threads.topic_id END,
+			topic_id = COALESCE(excluded.topic_id, threads.topic_id),
 			history_id = excluded.history_id,
 			snippet = excluded.snippet,
 			last_synced_at = CURRENT_TIMESTAMP
@@ -533,7 +552,7 @@ func (s *DB) UpsertMessage(m *Message) error {
 			body_plain, is_automated, classification_reason
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			topic_id = CASE WHEN excluded.topic_id != 0 THEN excluded.topic_id ELSE messages.topic_id END,
+			topic_id = COALESCE(excluded.topic_id, messages.topic_id),
 			internal_date = excluded.internal_date,
 			date_iso = excluded.date_iso,
 			from_address = excluded.from_address,
@@ -552,6 +571,46 @@ func (s *DB) UpsertMessage(m *Message) error {
 		return fmt.Errorf("upserting message %s: %w", m.ID, err)
 	}
 	return nil
+}
+
+// scanMessages reads message rows, tolerating the NULL topic that an ad-hoc
+// query sync leaves behind.
+func scanMessages(rows *sql.Rows) ([]Message, error) {
+	var msgs []Message
+	for rows.Next() {
+		var m Message
+		var topicID sql.NullInt64
+		if err := rows.Scan(
+			&m.ID, &m.ThreadID, &topicID, &m.InternalDate, &m.DateISO,
+			&m.FromAddress, &m.FromName, &m.ToAddress, &m.Subject, &m.Snippet,
+			&m.BodyPlain, &m.IsAutomated, &m.ClassificationReason, &m.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning message row: %w", err)
+		}
+		if topicID.Valid {
+			id := topicID.Int64
+			m.TopicID = &id
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+// MaxMessageInternalDate returns the newest message timestamp cached for a
+// topic, or zero when it has none. The incremental watermark is derived from
+// this rather than from whatever a single run happened to download, because
+// the mark means "everything older than this is already cached" — a property
+// of the cache, not of one run.
+func (s *DB) MaxMessageInternalDate(topicID int64) (int64, error) {
+	var newest sql.NullInt64
+	err := s.db.QueryRow(`SELECT MAX(internal_date) FROM messages WHERE topic_id = ?`, topicID).Scan(&newest)
+	if err != nil {
+		return 0, fmt.Errorf("reading newest cached message for topic %d: %w", topicID, err)
+	}
+	if !newest.Valid {
+		return 0, nil
+	}
+	return newest.Int64, nil
 }
 
 func (s *DB) UpdateTopicSyncState(topicID int64, lastHistoryID string, lastInternalDate int64) error {
@@ -577,35 +636,23 @@ func (s *DB) ListMessagesByTopic(topicID int64, humanOnly bool, sinceSec int64) 
 		FROM messages
 		WHERE topic_id = ?
 	`
+	args := []any{topicID}
 	if humanOnly {
 		query += " AND is_automated = 0"
 	}
 	if sinceSec > 0 {
-		query += fmt.Sprintf(" AND internal_date >= %d", sinceSec*1000)
+		query += " AND internal_date >= ?"
+		args = append(args, sinceSec*millisPerSecond)
 	}
 	query += " ORDER BY internal_date ASC"
 
-	rows, err := s.db.Query(query, topicID)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying messages: %w", err)
 	}
 	defer rows.Close()
 
-	var msgs []Message
-	for rows.Next() {
-		var m Message
-		err := rows.Scan(
-			&m.ID, &m.ThreadID, &m.TopicID, &m.InternalDate, &m.DateISO,
-			&m.FromAddress, &m.FromName, &m.ToAddress, &m.Subject, &m.Snippet,
-			&m.BodyPlain, &m.IsAutomated, &m.ClassificationReason, &m.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scanning message row: %w", err)
-		}
-		msgs = append(msgs, m)
-	}
-
-	return msgs, rows.Err()
+	return scanMessages(rows)
 }
 
 func (s *DB) SearchMessages(keyword, topicSlug string, humanOnly bool, sinceSec int64) ([]Message, error) {
@@ -616,7 +663,7 @@ func (s *DB) SearchMessages(keyword, topicSlug string, humanOnly bool, sinceSec 
 		FROM messages m
 	`
 	var where []string
-	var args []interface{}
+	var args []any
 
 	if topicSlug != "" {
 		where = append(where, "m.topic_id IN (SELECT id FROM topics WHERE slug = ?)")
@@ -635,7 +682,7 @@ func (s *DB) SearchMessages(keyword, topicSlug string, humanOnly bool, sinceSec 
 
 	if sinceSec > 0 {
 		where = append(where, "m.internal_date >= ?")
-		args = append(args, sinceSec*1000)
+		args = append(args, sinceSec*millisPerSecond)
 	}
 
 	if len(where) > 0 {
@@ -650,24 +697,12 @@ func (s *DB) SearchMessages(keyword, topicSlug string, humanOnly bool, sinceSec 
 	}
 	defer rows.Close()
 
-	var msgs []Message
-	for rows.Next() {
-		var m Message
-		err := rows.Scan(
-			&m.ID, &m.ThreadID, &m.TopicID, &m.InternalDate, &m.DateISO,
-			&m.FromAddress, &m.FromName, &m.ToAddress, &m.Subject, &m.Snippet,
-			&m.BodyPlain, &m.IsAutomated, &m.ClassificationReason, &m.CreatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scanning searched message row: %w", err)
-		}
-		msgs = append(msgs, m)
-	}
-
-	return msgs, rows.Err()
+	return scanMessages(rows)
 }
 
-func (s *DB) StartSyncRun(topicID int64) (int64, error) {
+// StartSyncRun opens a sync run record. A nil topicID records an ad-hoc query
+// sync that belongs to no saved search.
+func (s *DB) StartSyncRun(topicID *int64) (int64, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO sync_runs (topic_id, started_at, status)
 		VALUES (?, CURRENT_TIMESTAMP, 'running')
@@ -695,16 +730,24 @@ func (s *DB) CompleteSyncRun(runID int64, status string, threadsFetched, message
 	return nil
 }
 
-func (s *DB) Stats() (int, int, int, error) {
-	var topics, threads, messages int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM topics WHERE id != 0`).Scan(&topics); err != nil {
-		return 0, 0, 0, err
+// Stats summarizes what the cache currently holds.
+type Stats struct {
+	Topics   int `json:"topics"`
+	Threads  int `json:"threads"`
+	Messages int `json:"messages"`
+}
+
+// Stats counts the cached rows, excluding the reserved inbox-scan topic.
+func (s *DB) Stats() (Stats, error) {
+	var stats Stats
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM topics`).Scan(&stats.Topics); err != nil {
+		return Stats{}, fmt.Errorf("counting topics: %w", err)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM threads`).Scan(&threads); err != nil {
-		return 0, 0, 0, err
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM threads`).Scan(&stats.Threads); err != nil {
+		return Stats{}, fmt.Errorf("counting threads: %w", err)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&messages); err != nil {
-		return 0, 0, 0, err
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&stats.Messages); err != nil {
+		return Stats{}, fmt.Errorf("counting messages: %w", err)
 	}
-	return topics, threads, messages, nil
+	return stats, nil
 }
