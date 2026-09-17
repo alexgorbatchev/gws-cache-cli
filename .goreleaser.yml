@@ -19,6 +19,11 @@ builds:
 archives:
   - formats:
       - tar.gz
+    # Windows users get the format their tooling expects out of the box.
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
