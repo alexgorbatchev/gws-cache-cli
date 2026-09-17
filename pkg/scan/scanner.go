@@ -5,10 +5,10 @@ import (
 	"strconv"
 	"time"
 
-	"gws-cache/pkg/classifier"
-	"gws-cache/pkg/gmail"
-	"gws-cache/pkg/store"
-	"gws-cache/pkg/sync"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/classifier"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/sync"
 )
 
 type Scanner struct {

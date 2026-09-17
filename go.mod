@@ -1,4 +1,4 @@
-module gws-cache
+module github.com/alexgorbatchev/gws-cache-cli
 
 go 1.26.2
 

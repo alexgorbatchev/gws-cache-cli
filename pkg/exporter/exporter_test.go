@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gws-cache/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
 )
 
 func TestExporter(t *testing.T) {

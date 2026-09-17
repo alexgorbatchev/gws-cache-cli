@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gws-cache/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
 )
 
 func TestTopicService(t *testing.T) {

@@ -6,13 +6,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"gws-cache/pkg/calendar"
-	"gws-cache/pkg/exporter"
-	"gws-cache/pkg/gmail"
-	"gws-cache/pkg/scan"
-	"gws-cache/pkg/store"
-	"gws-cache/pkg/sync"
-	"gws-cache/pkg/topic"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/calendar"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/exporter"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/scan"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/sync"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/topic"
 )
 
 var (

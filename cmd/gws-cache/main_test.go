@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gws-cache/pkg/gmail"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
 )
 
 type mockCLIClient struct {

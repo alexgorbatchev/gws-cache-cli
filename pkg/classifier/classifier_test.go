@@ -4,13 +4,13 @@ import "testing"
 
 func TestClassify(t *testing.T) {
 	tests := []struct {
-		name        string
-		from        string
-		subject     string
-		snippet     string
-		headers     map[string]string
-		wantAuto    bool
-		wantReason  string
+		name       string
+		from       string
+		subject    string
+		snippet    string
+		headers    map[string]string
+		wantAuto   bool
+		wantReason string
 	}{
 		{
 			name:       "Human Recruiter Email",

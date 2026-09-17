@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	"gws-cache/pkg/classifier"
-	"gws-cache/pkg/gmail"
-	"gws-cache/pkg/store"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/classifier"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/gmail"
+	"github.com/alexgorbatchev/gws-cache-cli/pkg/store"
 )
 
 type Engine struct {
