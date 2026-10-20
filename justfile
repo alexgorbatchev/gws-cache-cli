@@ -11,11 +11,11 @@ build:
 
 # Run in human-facing interactive mode
 run *args: build
-    ./bin/gws-cache {{args}}
+    ./bin/gws-cache {{ args }}
 
 # Run in agent-facing token-conservative mode
 run-ai *args: build
-    AGENT=1 ./bin/gws-cache {{args}}
+    AGENT=1 ./bin/gws-cache {{ args }}
 
 # Run the unit test suite with the race detector
 test:
@@ -42,3 +42,7 @@ coverage-html: coverage
 # Remove build artifacts
 clean:
     rm -rf bin/ coverage.out coverage.html
+
+# Download project dependencies for local development
+setup:
+    go mod download
