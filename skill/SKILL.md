@@ -8,7 +8,7 @@ description: >-
 author: alexgorbatchev
 metadata:
   created_on: 2026-07-30 16:00
-  last_modified: 2026-09-17 12:00
+  last_modified: 2026-10-30 12:00
   status: current
 ---
 
@@ -27,6 +27,8 @@ AGENT=1 ./bin/gws-cache topic list
 
 The cache lives at `$XDG_CACHE_HOME/gws-cache/cache.db` (falling back to
 `~/.cache/gws-cache/cache.db`). Override it with `--db <path>`.
+Use quoted `~/` paths to resolve the current user's home directory. Help defaults
+and cache status fold paths inside that home to `~`; storage paths remain unchanged.
 
 ## Prerequisites & Authentication Setup
 

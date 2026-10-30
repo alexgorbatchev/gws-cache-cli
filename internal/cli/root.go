@@ -42,6 +42,7 @@ func NewRootCmd(version string) *cobra.Command {
 	root.SetVersionTemplate("{{.Version}}\n")
 
 	root.PersistentFlags().StringVar(&a.dbPath, "db", store.DefaultDBPath(), "Path to the local cache file")
+	root.PersistentFlags().Lookup("db").DefValue = displayPath(a.dbPath)
 	root.PersistentFlags().DurationVar(&a.timeout, "timeout", defaultTimeout, "How long to wait for a single Google Workspace request")
 
 	root.AddCommand(
@@ -59,7 +60,11 @@ func NewRootCmd(version string) *cobra.Command {
 
 // openStore opens the cache database.
 func (a *app) openStore() (*store.DB, error) {
-	return store.Open(a.dbPath)
+	path, err := expandPath(a.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(path)
 }
 
 // client returns the Google Workspace CLI client.

@@ -85,7 +85,7 @@ Global flags apply to every command.
 
 | Flag | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--db <path>` | | `$XDG_CACHE_HOME/gws-cache/cache.db` | Path to the local cache file |
+| `--db <path>` | | `$XDG_CACHE_HOME/gws-cache/cache.db` | Path to the local cache file; quoted `~/` paths expand to your home directory. Help and status display paths inside your home with `~`. |
 | `--timeout <duration>` | | `2m0s` | How long to wait for a single Google Workspace request |
 | `--version` | `-v` | | Print the version and exit |
 | `--help` | `-h` | | Show the command tree |

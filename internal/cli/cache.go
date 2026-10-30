@@ -39,7 +39,7 @@ func newCacheStatusCmd(a *app) *cobra.Command {
 			}
 
 			return out.records([]record{{
-				{Key: "location", Value: a.dbPath},
+				{Key: "location", Value: displayPath(a.dbPath)},
 				{Key: "topics", Value: itoa(stats.Topics)},
 				{Key: "conversations", Value: itoa(stats.Threads)},
 				{Key: "messages", Value: itoa(stats.Messages)},
