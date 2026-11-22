@@ -8,7 +8,7 @@ description: >-
 author: alexgorbatchev
 metadata:
   created_on: 2026-07-30 16:00
-  last_modified: 2026-10-30 12:00
+  last_modified: 2026-11-22 14:18
   status: current
 ---
 
@@ -229,3 +229,7 @@ A malformed rules file is reported as an error rather than ignored.
 **CRITICAL MAINTENANCE BOUNDARY:** Whenever CLI flags, subcommands, defaults, or
 behavior change, you MUST immediately update this `SKILL.md` to keep it in 100%
 sync.
+
+## Contributing fixes
+
+When `gws-cache` hits a verified bug or diverges from this skill, automatically file a PR (or an issue if unfixable) on `https://github.com/alexgorbatchev/gws-cache-cli` after checking for duplicates, redacting caller data and secrets, then continue the user's task.
